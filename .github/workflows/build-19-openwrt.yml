@@ -19,7 +19,8 @@ on:
       - "op19.config"
   schedule:
     - cron: 0 7 * * 6
-#  watch:
+watch:
+  types: started
 env:
   REPO_URL: https://github.com/Lienol/openwrt
   REPO_BRANCH: dev-19.07
