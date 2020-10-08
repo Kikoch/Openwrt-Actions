@@ -1,14 +1,12 @@
-#
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
-#
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
+#=================================================
 # https://github.com/P3TERX/Actions-OpenWrt
 # Description: Build OpenWrt using GitHub Actions
-#
+# Lisence: MIT
+# Author: P3TERX
+# Blog: https://p3terx.com
+#=================================================
 
-name: Build OpenWrt
+name: Build Openwrt
 
 on:
   repository_dispatch:
@@ -18,25 +16,23 @@ on:
     branches:
       - main
     paths:
-      - 'op19.config'
+      - "op19.config"
   schedule:
-    - cron: 0 8 * * 5
-  watch:
-    types: started
-
+    - cron: 0 7 * * 6
+#  watch:
 env:
   REPO_URL: https://github.com/Lienol/openwrt
   REPO_BRANCH: dev-19.07
   FEEDS_CONF: feeds.conf.default
-  CONFIG_FILE: op19.config
+  CONFIG_FILE: .config
   DIY_P1_SH: op19-diy-part1.sh
   DIY_P2_SH: op19-diy-part2.sh
-  SSH_ACTIONS: false
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: true
-  UPLOAD_WETRANSFER: true
+  UPLOAD_WETRANSFER: false
   TZ: Asia/Shanghai
+
 
 jobs:
   build:
@@ -88,10 +84,6 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: SSH connection to Actions
-      uses: P3TERX/debugger-action@main
-      if: env.SSH_ACTIONS == 'true' || contains(github.event.action, 'ssh')
-
     - name: Download package
       id: package
       run: |
@@ -105,12 +97,12 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
+        echo -e "$(nproc) thread compile"
         echo "::set-output name=status::success"
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "::set-env name=DEVICE_NAME::_$(cat DEVICE_NAME)"
-        echo "::set-env name=FILE_DATE::_$(date +"%Y%m%d%H%M")"
+        [ -s DEVICE_NAME ] && echo "::set-output name=DEVICE_NAME::$(cat DEVICE_NAME)"
+        echo "::set-output name=FILE_DATE::$(date +"%Y%m%d%H%M")"
 
     - name: Check space usage
       if: (!cancelled())
@@ -120,7 +112,7 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        name: OpenWrt_bin_${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
         path: openwrt/bin
 
     - name: Organize files
@@ -129,26 +121,26 @@ jobs:
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
-        echo "::set-env name=FIRMWARE::$PWD"
+        echo "::set-output name=FIRMWARE::$PWD"
         echo "::set-output name=status::success"
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        name: OpenWrt_firmware_${{ steps.compile.outputs.DEVICE_NAME }}_${{ steps.compile.outputs.FILE_DATE }}
+        path: ${{ steps.organize.outputs.FIRMWARE }}
 
     - name: Upload firmware to cowtransfer
       if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
       run: |
         curl -fsSL git.io/file-transfer | sh
-        ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
+        ./transfer cow --block 2621440 -s -p 64 --no-progress ${{ steps.organize.outputs.FIRMWARE }} | tee cowtransfer.log
         echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
 
     - name: Upload firmware to WeTransfer
       if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
       run: |
         curl -fsSL git.io/file-transfer | sh
-        ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
+        ./transfer wet -s -p 16 --no-progress ${{ steps.organize.outputs.FIRMWARE }} | tee wetransfer.log
         echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
