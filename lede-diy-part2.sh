@@ -24,4 +24,4 @@
     sed -i 's@\(CONFIG_KERNEL_BUILD_DOMAIN=\).*@\1$"GitHub Actions"@' .config
 #=================================================
 # Modify the version number
-sed -i "s/OpenWrt /Kikoch build $(TZ=UTC-8 date "+%Y.%m.%d") @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
+sed -i "s/OpenWrt /Kikoch @ OpenWrt /g" package/lean/default-settings/files/zzz-default-settings
