@@ -17,8 +17,8 @@ on:
       - main
     paths:
       - "lede.config"
-  schedule:
-    - cron: 0 7 * * 6
+ # schedule:
+ #   - cron: 0 7 * * 6
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
