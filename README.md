@@ -1,42 +1,39 @@
-# Actions-OpenWrt
+# Openwrt-Actions
 
-[![LICENSE](https://img.shields.io/github/license/mashape/apistatus.svg?style=flat-square&label=LICENSE)](https://github.com/P3TERX/Actions-OpenWrt/blob/master/LICENSE)
-![GitHub Stars](https://img.shields.io/github/stars/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Stars&logo=github)
-![GitHub Forks](https://img.shields.io/github/forks/P3TERX/Actions-OpenWrt.svg?style=flat-square&label=Forks&logo=github)
+基于 GitHub Actions 云编译 OpenWrt / ImmortalWrt 固件（模板来自 [P3TERX/Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt)）。
 
-Build OpenWrt using GitHub Actions
+## 当前维护的编译任务
 
-[Read the details in my blog (in Chinese) | 中文教程](https://p3terx.com/archives/build-openwrt-with-github-actions.html)
+### 1. Build PonWrt XG-040G-MD
 
-## Usage
+- **Workflow**: `.github/workflows/build-ponwrt-xg040g.yml`
+- **设备**: Nokia XG-040G-MD (UBI) — Airoha AN7581 XG-PON ONU
+- **源码**: [pbs05/ponwrt](https://github.com/pbs05/ponwrt)（ImmortalWrt fork + PON 支持，**保留 XG-PON 光口功能**）
+- **内置软件**: 中文 LuCI、OpenClash、DDNS(含 dnspod)、filebrowser、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、USB3 存储等
+- **配置文件**: `ponwrt-extra.config`（附加包）+ `ponwrt-diy-part1/2.sh`（基础配置合并，仅编 nokia_xg-040g-md-ubi）
+- **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-squashfs-sysupgrade.itb`
 
-- Click the [Use this template](https://github.com/P3TERX/Actions-OpenWrt/generate) button to create a new repository.
-- Generate `.config` files using [Lean's OpenWrt](https://github.com/coolsnowwolf/lede) source code. ( You can change it through environment variables in the workflow file. )
-- Push `.config` file to the GitHub repository, and the build starts automatically.Progress can be viewed on the Actions page.
-- When the build is complete, click the `Artifacts` button in the upper right corner of the Actions page to download the binaries.
+### 2. Build ImmortalWrt Cudy TR3000
 
-### Tips
+- **Workflow**: `.github/workflows/build-immortalwrt-cudy-tr3000.yml`
+- **设备**: Cudy TR3000（MT7981B），同时编译 3 个 profile：`cudy_tr3000-v1`（原厂分区）、`cudy_tr3000-256mb-v1`（256MB 内存版）、`cudy_tr3000-v1-ubootmod`（OpenWrt U-Boot 分区）
+- **源码**: [ImmortalWrt](https://github.com/ImmortalWrt/ImmortalWrt) `openwrt-25.12` 稳定分支
+- **内置软件**: 中文 LuCI、QModem 模组管理套件（luci-app-qmodem / qmodem / tom_modem / quectel-CM-5G-M / sms_forwarder）、WireGuard、DDNS(含 dnspod)
+- **配置文件**: `cudy-tr3000-extra.config` + `cudy-tr3000-diy-part2.sh`
+- **QModem 来源**: [FUjr/QModem](https://github.com/FUjr/QModem)（src-link 作为 feed）
 
-It may take a long time to create a `.config` file and build the OpenWrt firmware. Thus, before create repository to build your own firmware, you may check out if others have already built it which meet your needs by simply [search `Actions-Openwrt` in GitHub](https://github.com/search?q=Actions-openwrt).
+## 使用方法
 
-Add some meta info of your built firmware (such as firmware architecture and installed packages) to your repository introduction, this will save others' time.
+1. 修改对应任务的 `.config` 文件并 push 到 main → **自动触发编译**（也可在 Actions 页面手动 Run workflow）
+2. 编译约 1.5~2.5 小时，进度在 Actions 页面查看
+3. 完成后在 run 页面底部 **Artifacts** 下载固件目录
+4. 手动触发时可填 `release: yes` 同时发布 Release
 
-## Acknowledgments
+## 升级注意事项
 
-- [Microsoft](https://www.microsoft.com)
-- [Microsoft Azure](https://azure.microsoft.com)
-- [GitHub](https://github.com)
-- [GitHub Actions](https://github.com/features/actions)
-- [tmate](https://github.com/tmate-io/tmate)
-- [mxschmitt/action-tmate](https://github.com/mxschmitt/action-tmate)
-- [csexton/debugger-action](https://github.com/csexton/debugger-action)
-- [Cisco](https://www.cisco.com/)
-- [OpenWrt](https://github.com/openwrt/openwrt)
-- [Lean's OpenWrt](https://github.com/coolsnowwolf/lede)
-- [Cowtransfer](https://cowtransfer.com)
-- [WeTransfer](https://wetransfer.com/)
-- [Mikubill/transfer](https://github.com/Mikubill/transfer)
+- **XG-040G-MD**: 刷机前备份 `bosa`、`ri` 两个 UBI 卷（光口校准数据）
+- **TR3000**: 原厂分区机器用 `-v1` / `-256mb-v1` 的 factory 或 initramfs 镜像；已刷 OpenWrt U-Boot 的用 `-ubootmod` 的 sysupgrade 镜像
 
 ## License
 
-[MIT](https://github.com/P3TERX/Actions-OpenWrt/blob/main/LICENSE) © P3TERX
+[MIT](LICENSE) © P3TERX（模板）
