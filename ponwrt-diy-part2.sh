@@ -13,10 +13,19 @@ CONFIG_TARGET_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 EOF
 
-# 3. 追加自定义附加包（OpenClash/DDNS/中文等，见 ponwrt-extra.config）
+# 3. 关掉基础配置里的 WiFi =m 模块（XG-040G-MD 无线电芯片都没有，
+#    mac80211/mt76/wpad 编了也进不了镜像，纯粹浪费 CI 时间）
+for pkg in hostapd-common iw kmod-cfg80211 kmod-mac80211 kmod-mt76-connac \
+           kmod-mt76-core kmod-mt7915e kmod-mt7916-firmware ucode-mod-nl80211 \
+           ucode-mod-rtnl wifi-scripts wireless-regdb wpad-openssl \
+           znxt-zn515-mt7916-eeprom; do
+  sed -i "s/^CONFIG_PACKAGE_${pkg}=.*/# CONFIG_PACKAGE_${pkg} is not set/" .config
+done
+
+# 4. 追加自定义附加包（OpenClash/DDNS/中文等，见 ponwrt-extra.config）
 [ -e $GITHUB_WORKSPACE/$CONFIG_FILE ] && cat $GITHUB_WORKSPACE/$CONFIG_FILE >> .config
 
-# 4. 展开为完整配置
+# 5. 展开为完整配置
 make defconfig
 
 echo "=== 已选设备 ==="
