@@ -1,7 +1,8 @@
 #=================================================
 # Build PonWrt (Nokia XG-040G-MD UBI, 保留 PON 光口)
-# 模板参考: https://github.com/P3TERX/Actions-OpenWrt
-# 源码: https://github.com/pbs05/ponwrt (ImmortalWrt + Airoha PON)
+# 构建方法对齐 PonWrt 官方 CI (.github/workflows/release.yml):
+#   kconfig.pl 合并 configs + make defconfig + make
+# 源码 pin 到已知良好 commit（usb-sfp 重构前），可用 input 覆盖
 #=================================================
 
 name: Build PonWrt XG-040G-MD
@@ -10,6 +11,10 @@ on:
   repository_dispatch:
   workflow_dispatch:
     inputs:
+      source_ref:
+        description: "PonWrt 源码 ref (留空=用默认 pin 的已知良好版本)"
+        required: false
+        default: ""
       release:
         description: "是否创建 Release (yes/no)"
         required: false
@@ -22,48 +27,62 @@ on:
       - "ponwrt-extra.config"
       - "ponwrt-diy-part1.sh"
       - "ponwrt-diy-part2.sh"
-  # schedule:
-  #   - cron: 0 18 * * 5
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
-  REPO_BRANCH: master
-  BASE_CONFIG: configs/an7581.config
+  # 已知良好版本: 2026-09-25, PON feeds/configs 齐备, usb-sfp 重构合入前。
+  # 注意: r41341-f44d1535b4 (f44d1535b4, 9/18) 当时树内还没有 PON 包，不能用！
+  REPO_REF: 5651948f9d6e9aa48e22338d6abe650019988448
   CONFIG_FILE: ponwrt-extra.config
   DIY_P1_SH: ponwrt-diy-part1.sh
   DIY_P2_SH: ponwrt-diy-part2.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: false
   TZ: Asia/Shanghai
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
     - name: Checkout
       uses: actions/checkout@v5
 
+    - name: Free build space
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        sudo apt-get clean
+
     - name: Initialization environment
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        sudo rm -rf /etc/apt/sources.list.d/* /usr/share/dotnet /usr/local/lib/android /opt/ghc
-        sudo -E apt-get -qq update
-        sudo bash -c 'bash <(curl -s https://build-scripts.immortalwrt.org/init_build_environment.sh)'
-        sudo -E apt-get -qq autoremove --purge
-        sudo -E apt-get -qq clean
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+          gettext git g++-multilib gcc-multilib gperf help2man intltool \
+          libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+          libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+          libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+          python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+          qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+          uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
         sudo timedatectl set-timezone "$TZ"
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
-    - name: Clone PonWrt source code
+    - name: Clone PonWrt source code (pinned)
       working-directory: /workdir
       run: |
         df -hT $PWD
-        git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        REF="${{ github.event.inputs.source_ref }}"
+        [ -z "$REF" ] && REF="$REPO_REF"
+        echo "Building from: $REF"
+        git clone $REPO_URL openwrt
+        cd openwrt
+        git checkout -q $REF
+        echo "SOURCE_REF=$REF" >> $GITHUB_ENV
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Run DIY part1 (自定义前置脚本)
@@ -78,7 +97,7 @@ jobs:
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
 
-    - name: Load custom configuration (基础配置 + 附加包)
+    - name: Load configuration (官方 kconfig 合并 + 附加包)
       run: |
         [ -e files ] && mv files openwrt/files
         chmod +x $DIY_P2_SH
@@ -107,13 +126,6 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
-    - name: Upload bin directory
-      uses: actions/upload-artifact@v5
-      if: env.UPLOAD_BIN_DIR == 'true' && !cancelled()
-      with:
-        name: PonWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
-        path: openwrt/bin
-
     - name: Organize files
       id: organize
       if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
@@ -137,7 +149,7 @@ jobs:
         files: ${{ env.FIRMWARE }}/*
         body: |
           PonWrt 云编译固件 - Nokia XG-040G-MD (UBI)
-          源码: pbs05/ponwrt (${{ env.REPO_BRANCH }})
+          源码: pbs05/ponwrt @ ${{ env.SOURCE_REF }}
           编译时间: ${{ env.FILE_DATE }}
           含完整 PON 光口支持 (XG-PON)
       env:
