@@ -29,3 +29,14 @@ echo "=== PON 相关包 ==="
 grep -E 'PON|PONCTL|POND|XPON|ponctl|pond' .config | grep '=y' | head -20 || true
 echo "=== 2.5G PHY 相关 ==="
 grep -E 'en8811|EN8811' .config | grep '=y' || true
+
+# 强校验: 关键硬件驱动缺失则构建失败 (避免产出 PON/2.5G 口失效的固件)
+MISSING=""
+for pkg in kmod-airoha-en7572 kmod-phy-airoha-en8811h kmod-airoha-xpon kmod-airoha-pon-frontend; do
+  grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || MISSING="$MISSING $pkg"
+done
+if [ -n "$MISSING" ]; then
+  echo "FATAL: 关键硬件驱动未进入配置:$MISSING"
+  exit 1
+fi
+echo "=== 关键驱动校验通过 ==="
