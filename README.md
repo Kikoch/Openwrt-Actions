@@ -30,7 +30,9 @@
 
 - **Workflow**: `.github/workflows/build-immortalwrt-cudy-tr3000.yml`
 - **设备**: Cudy TR3000（MT7981B），同时编译 3 个 profile：`cudy_tr3000-v1`（原厂分区）、`cudy_tr3000-256mb-v1`（256MB 内存版）、`cudy_tr3000-v1-ubootmod`（OpenWrt U-Boot 分区）
-- **源码**: [ImmortalWrt](https://github.com/ImmortalWrt/ImmortalWrt) `openwrt-25.12` 稳定分支
+- **源码**: [ImmortalWrt](https://github.com/ImmortalWrt/ImmortalWrt) 稳定分支（自动探测最新 `openwrt-YY.MM`）
+- **自动编译**: 每日北京时间 05:30 探测上游稳定分支 HEAD，与 `cudy-tr3000.last-built-ref` 比对，**有新提交才自动编译**（编译成功后自动回写记录文件）；无更新则跳过
+- **手动触发**: push 修改 `cudy-tr3000-extra.config` / `cudy-tr3000-diy-part2.sh`；或 Actions 页面手动 Run（`force: yes` 跳过更新检查，`release: yes` 发 Release）
 - **内置软件**: 中文 LuCI、QModem 模组管理套件（luci-app-qmodem / qmodem / tom_modem / quectel-CM-5G-M / sms_forwarder）、WireGuard、DDNS(含 dnspod)
 - **配置文件**: `cudy-tr3000-extra.config` + `cudy-tr3000-diy-part2.sh`
 - **QModem 来源**: [FUjr/QModem](https://github.com/FUjr/QModem)（src-link 作为 feed）

@@ -1,8 +1,15 @@
 #=================================================
 # Build ImmortalWrt 稳定版 (Cudy TR3000, 含 QModem 套件)
 # 模板参考: https://github.com/P3TERX/Actions-OpenWrt
-# 源码: https://github.com/ImmortalWrt/ImmortalWrt (openwrt-25.12 稳定分支)
+# 源码: https://github.com/ImmortalWrt/ImmortalWrt 稳定分支
+#       (自动探测最新 openwrt-YY.MM, 无更新时跳过编译)
 # QModem: https://github.com/FUjr/QModem
+#
+# 触发方式:
+#   - 每日定时探测上游稳定分支, 有新提交才编译 (schedule)
+#   - push 修改 cudy-tr3000-extra.config / cudy-tr3000-diy-part2.sh
+#   - 手动 workflow_dispatch (可强制 release)
+# 已编译版本记录: cudy-tr3000.last-built-ref (编译成功后自动回写)
 #=================================================
 
 name: Build ImmortalWrt Cudy TR3000
@@ -15,6 +22,10 @@ on:
         description: "是否创建 Release (yes/no)"
         required: false
         default: "no"
+      force:
+        description: "跳过上游更新检查, 强制编译 (yes/no)"
+        required: false
+        default: "no"
   push:
     branches:
       - main
@@ -22,27 +33,76 @@ on:
     paths:
       - "cudy-tr3000-extra.config"
       - "cudy-tr3000-diy-part2.sh"
-  # schedule:
-  #   - cron: 0 18 * * 5
+  schedule:
+    # UTC 21:30 = 北京时间 05:30, 每日探测一次上游稳定分支
+    - cron: "30 21 * * *"
+
+permissions:
+  contents: write
 
 env:
   REPO_URL: https://github.com/ImmortalWrt/ImmortalWrt
-  REPO_BRANCH: openwrt-25.12
   QMODEM_URL: https://github.com/FUjr/QModem.git
   CONFIG_FILE: cudy-tr3000-extra.config
   DIY_P2_SH: cudy-tr3000-diy-part2.sh
+  LAST_REF_FILE: cudy-tr3000.last-built-ref
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
-    if: github.event.repository.owner.id == github.event.sender.id
-
+  check:
+    name: Check upstream stable update
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event.repository.owner.id == github.event.sender.id
+    outputs:
+      should_build: ${{ steps.check.outputs.should_build }}
+      branch: ${{ steps.check.outputs.branch }}
+      sha: ${{ steps.check.outputs.sha }}
     steps:
     - name: Checkout
       uses: actions/checkout@v5
+
+    - name: Resolve latest stable branch & compare last built ref
+      id: check
+      run: |
+        # 自动探测最新稳定分支 openwrt-YY.MM (取 YY.MM 最大者)
+        LATEST_BRANCH=$(git ls-remote --heads "$REPO_URL" 'openwrt-*' \
+          | awk -F'/' '{print $NF}' \
+          | awk -F. 'NF==2 && $1+0>20 && $2 ~ /^[0-9]+$/ {printf "%d%02d %s.%s\n", $1, $2, $1, $2}' \
+          | sort -rn | head -1 | awk '{print $2}')
+        [ -n "$LATEST_BRANCH" ] || { echo "FATAL: 未探测到稳定分支"; exit 1; }
+        UPSTREAM_SHA=$(git ls-remote "$REPO_URL" "$LATEST_BRANCH" | awk '{print $1}')
+        LAST=$(cat "$LAST_REF_FILE" 2>/dev/null || echo "")
+        echo "上游最新稳定: $LATEST_BRANCH @ ${UPSTREAM_SHA:0:12}"
+        echo "上次已编译:   ${LAST:-<无记录>}"
+
+        echo "branch=$LATEST_BRANCH" >> "$GITHUB_OUTPUT"
+        echo "sha=$UPSTREAM_SHA" >> "$GITHUB_OUTPUT"
+
+        # 非定时触发 (push / 手动 / repository_dispatch): 直接编译
+        if [ "$GITHUB_EVENT_NAME" != "schedule" ]; then
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "非定时触发, 直接编译"
+        elif [ "$LAST" = "${LATEST_BRANCH}@${UPSTREAM_SHA}" ]; then
+          echo "should_build=false" >> "$GITHUB_OUTPUT"
+          echo "上游无更新, 跳过编译"
+        else
+          echo "should_build=true" >> "$GITHUB_OUTPUT"
+          echo "上游有更新, 开始编译"
+        fi
+
+  build:
+    name: Build firmware
+    needs: check
+    if: needs.check.outputs.should_build == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+
+    - name: Resolve build branch
+      run: echo "REPO_BRANCH=${{ needs.check.outputs.branch }}" >> "$GITHUB_ENV"
 
     - name: Initialization environment
       env:
@@ -62,6 +122,7 @@ jobs:
       run: |
         df -hT $PWD
         git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        echo "SOURCE_SHA=$(cd openwrt && git rev-parse HEAD)" >> "$GITHUB_ENV"
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Clone QModem source (拉取 QModem)
@@ -134,7 +195,20 @@ jobs:
         files: ${{ env.FIRMWARE }}/*
         body: |
           ImmortalWrt ${{ env.REPO_BRANCH }} 云编译固件 - Cudy TR3000
+          上游 commit: ${{ env.SOURCE_SHA }}
           含 QModem 模组管理套件 (luci-app-qmodem / qmodem / tom_modem / quectel-CM-5G-M)
           编译时间: ${{ env.FILE_DATE }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Update last-built ref (记录已编译的上游版本)
+      if: success() && github.event_name == 'schedule'
+      run: |
+        REF="${{ needs.check.outputs.branch }}@${{ needs.check.outputs.sha }}"
+        echo "$REF" > "$LAST_REF_FILE"
+        git config user.name "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add "$LAST_REF_FILE"
+        git commit -m "chore(tr3000): auto-build ref $REF [skip ci]"
+        git push
+        echo "已回写 $LAST_REF_FILE = $REF"
