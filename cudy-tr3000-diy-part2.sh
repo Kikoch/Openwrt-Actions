@@ -25,3 +25,14 @@ echo "=== 已选设备 ==="
 grep '^CONFIG_TARGET.*DEVICE.*=y' .config || true
 echo "=== QModem 相关包 ==="
 grep -E 'qmodem|tom_modem|quectel|ubus-at-daemon|sms' .config | grep '=y' || true
+
+# 4. 强校验: 关键包缺失则构建失败
+MISSING=""
+for pkg in luci-app-openclash zram-swap kmod-zram luci-app-adblock-fast gawk; do
+  grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || MISSING="$MISSING $pkg"
+done
+if [ -n "$MISSING" ]; then
+  echo "FATAL: 关键包未进入配置:$MISSING"
+  exit 1
+fi
+echo "=== 关键包校验通过 ==="
