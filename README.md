@@ -44,6 +44,13 @@
 3. 完成后在 run 页面底部 **Artifacts** 下载固件目录
 4. 手动触发时可填 `release: yes` 同时发布 Release
 
+## 刷机指南
+
+见 [flash-guides/](flash-guides/) 目录：
+
+- [Nokia XG-040G-MD (UBI)](flash-guides/xg-040g-md.md) — 含网页 U-Boot 救砖、首次迁移串口步骤、`bosa`/`ri` 备份警示（参考 [Loong1996 恢复指南](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)）
+- [Cudy TR3000](flash-guides/cudy-tr3000.md) — 三种 profile 与设备状态对应表、原厂→OpenWrt 迁移、救砖
+
 ## 升级注意事项
 
 - **XG-040G-MD**: 刷机前备份 `bosa`、`ri` 两个 UBI 卷（光口校准数据）
