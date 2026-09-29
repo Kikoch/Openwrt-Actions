@@ -80,3 +80,12 @@ sysupgrade -n /tmp/xxx-squashfs-sysupgrade.itb
 - **PON 需要完整驱动链**：`kmod-airoha-en7572`（光前端）+ `kmod-phy-airoha-en8811h`（2.5G LAN1）缺任何一个都会出现"PON 激活失败 / 2.5G 口起不来"（详见本仓库 PonWrt 构建的强校验，已防呆）
 - 刷完 PON 无法注册（`loid-not-found` 循环）：先确认原装光猫已彻底下线，再核对 LOID 认证（部分局端要求 LOID+密码，在 `/etc/config/pon` 的 `line0_omci` 段加 `option loid_password`）
 - 每日自动任务：03:00 `/root/openclash_lowmem_update.sh`（停服更新 Geo/订阅，低内存方案）、04:00 adblock-fast 列表刷新
+
+## 8. 本仓库产物对应关系
+
+| 工作流 | 产物 | 用途 |
+|---|---|---|
+| Build PonWrt XG-040G-MD（主力） | `ponwrt-...-nokia_xg-040g-md-ubi-...-sysupgrade.itb` | 日常升级/刷入（当前在用） |
+| Build ImmortalWrt XG-040G-MD（实验） | `*-sysupgrade.itb` / `*-initramfs-recovery.itb` / `*-preloader.bin` / `*-bl31-uboot.fip` | 试跑验证 → 正式落盘；首次迁移用这套引导文件 |
+
+PonWrt 工作流不产出独立 preloader/FIP，首次迁移用 ImmortalWrt 工作流的引导文件；引导链均为 AN7581 UBI 布局，通用。
