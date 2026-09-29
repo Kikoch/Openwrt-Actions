@@ -9,8 +9,8 @@
 - **Workflow**: `.github/workflows/build-ponwrt-xg040g.yml`
 - **设备**: Nokia XG-040G-MD (UBI) — Airoha AN7581 XG-PON ONU
 - **源码**: [pbs05/ponwrt](https://github.com/pbs05/ponwrt)（ImmortalWrt fork + PON 支持，**保留 XG-PON 光口功能**，pin `5651948f`）
-- **内置软件**: 中文 LuCI(仅 bootstrap 主题)、OpenClash、DDNS(含 dnspod)、attendedsysupgrade、WireGuard、BBR、nft-fullcone、zram-swap(256MB)、USB3 存储、adblock-fast 及其推荐组件(gawk/grep/sed/coreutils-sort)等
-- **明确排除**: luci-app-ttyd（终端）、luci-app-iptv、luci-app-package-manager（plugins 页面对 pin 内核固件无意义且误装快照 kmod 会坏系统）
+- **内置软件**: 中文 LuCI(仅 bootstrap 主题)、OpenClash、DDNS(含 dnspod)、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap(256MB)、USB3 存储、adblock-fast 及其推荐组件(gawk/grep/sed/coreutils-sort)等
+- **明确排除**: luci-app-ttyd（终端）、luci-app-iptv
 - **配置文件**: `ponwrt-extra.config`（附加包）+ `ponwrt-diy-part1/2.sh`（基础配置合并，仅编 nokia_xg-040g-md-ubi，含关键驱动强校验）
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`
 - **已验证**: PON(XG-PON + EN7572 光前端)、2.5G LAN(EN8811H)、PPPoE、zram、低内存更新方案（配套脚本见 `/root/openclash_lowmem_update.sh`，每日 03:00 停服更新，04:00 adblock 列表刷新）
