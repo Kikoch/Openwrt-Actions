@@ -66,11 +66,11 @@ jobs:
     - name: Resolve latest stable branch & compare last built ref
       id: check
       run: |
-        # 自动探测最新稳定分支 openwrt-YY.MM (取 YY.MM 最大者)
+        # 自动探测最新稳定分支 openwrt-YY.MM (版本号最大者)
         LATEST_BRANCH=$(git ls-remote --heads "$REPO_URL" 'openwrt-*' \
           | awk -F'/' '{print $NF}' \
-          | awk -F. 'NF==2 && $1+0>20 && $2 ~ /^[0-9]+$/ {printf "%d%02d %s.%s\n", $1, $2, $1, $2}' \
-          | sort -rn | head -1 | awk '{print $2}')
+          | grep -E '^openwrt-[0-9]{2}\.[0-9]+$' \
+          | sort -rV | head -1)
         [ -n "$LATEST_BRANCH" ] || { echo "FATAL: 未探测到稳定分支"; exit 1; }
         UPSTREAM_SHA=$(git ls-remote "$REPO_URL" "$LATEST_BRANCH" | awk '{print $1}')
         LAST=$(cat "$LAST_REF_FILE" 2>/dev/null || echo "")
