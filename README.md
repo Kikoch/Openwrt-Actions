@@ -4,20 +4,23 @@
 > Cloud-build OpenWrt / ImmortalWrt / PonWrt firmware with GitHub Actions: pinned source + pinned feeds, artifact-level verification before release. Targets Nokia XG-040G-MD (Airoha AN7581 XG-PON) and Cudy TR3000 (MT7981).
 
 基于 GitHub Actions 云编译固件（模板来自 [P3TERX/Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt)）。
-同一仓库维护三条独立的编译线，共用一套**产物层校验**脚本。
+同一仓库维护两条独立的编译线，共用一套**产物层校验**脚本。
 
 设计原则：**源码定版、feeds 定版、产物先校验后发布。** 编译成功不等于固件能用 ——
 `.config` 看着对，产物里可能根本没有目标设备的镜像。
 
-## 三条编译线
+## 两条编译线
 
 | # | Workflow | 设备 / SoC | 源码 | 状态 |
 |---|----------|-----------|------|------|
 | 1 | `build-ponwrt-xg040g.yml` | Nokia XG-040G-MD (UBI) / Airoha AN7581 | [pbs05/ponwrt](https://github.com/pbs05/ponwrt) pin `5651948f` | 主力，保留 XG-PON 光口 |
-| 2 | `build-immortalwrt-xg040g.yml` | 同上 | [ImmortalWrt master](https://github.com/immortalwrt/immortalwrt) pin `bf156b68` | 实验性，官方设备定义 + ponwrt DTS 覆盖补 PON |
-| 3 | `build-immortalwrt-cudy-tr3000.yml` | Cudy TR3000 / MT7981B | ImmortalWrt 稳定分支（自动探测 + 增量编译） | 日常使用，含 QModem 套件 |
+| 2 | `build-immortalwrt-cudy-tr3000.yml` | Cudy TR3000 / MT7981B | ImmortalWrt 稳定分支（自动探测 + 增量编译） | 日常使用，含 QModem 套件 |
 
-### 1. Build PonWrt XG-040G-MD（主力）
+> 原「Build ImmortalWrt XG-040G-MD（实验）」线已删除：上游 master 滚动快，
+> ponwrt DTS / 内核补丁覆盖需要持续 rebase，维护成本高于收益。
+> 需要恢复可 `git revert` 删除提交。
+
+### 1. Build PonWrt XG-040G-MD
 
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`（+ `-initramfs-recovery.itb`）
 - **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap（256MB）、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
@@ -26,14 +29,7 @@
 - **已验证**: XG-PON 光口、2.5G LAN（EN8811H）、PPPoE、zram、低内存更新方案（`openclash_lowmem_update.sh`，每日 03:00 停服更新）
 - **手动参数**: `source_ref`（换源码版本）、`pin_feeds`（关闭 feeds 定版）、`skip_verify`（排障用）、`release`
 
-### 2. Build ImmortalWrt XG-040G-MD（实验性）
-
-- 上游设备定义含 EN8811H，但 **DTS 无 PON 节点、设备定义无 PON 包**
-- `immortalwrt-diy-part1.sh` 从 ponwrt pin 版本覆盖 4 个 DTS（含 `xpon_mac@1fb64000`、EN7572 光前端）
-- `immortalwrt-extra.config` 显式选择 PON 全栈（pon_drivers / pon_userspace feed）
-- **风险**: master 滚动快，DTS 覆盖可能与新内核不兼容。稳定使用请选第 1 条线的产物
-
-### 3. Build ImmortalWrt Cudy TR3000
+### 2. Build ImmortalWrt Cudy TR3000
 
 - 每日 05:30（北京）探测最新 `openwrt-YY.MM` 稳定分支，与 `cudy-tr3000.last-built-ref` 比对，**有新提交才编译**，成功后自动回写
 - 一次构建只出一个 profile，手动 Run 时可选：
@@ -66,8 +62,8 @@
 - `build-info.txt` — 源码 commit、各 feed commit、编译时间、镜像清单
 
 关键包清单按编译线分开维护：`ponwrt-required-packages.txt`、
-`immortalwrt-required-packages.txt`、`cudy-tr3000-required-packages.txt`。
-只放"缺了就废"的包，别塞可选包，否则校验会变成噪音。
+`cudy-tr3000-required-packages.txt`。只放"缺了就废"的包，别塞可选包，
+否则校验会变成噪音。
 
 ## 可复现性
 
@@ -85,15 +81,12 @@
 ```
 ├── .github/workflows/
 │   ├── build-ponwrt-xg040g.yml            # 线 1: PonWrt XG-040G-MD
-│   ├── build-immortalwrt-xg040g.yml       # 线 2: ImmortalWrt XG-040G-MD (实验)
-│   └── build-immortalwrt-cudy-tr3000.yml  # 线 3: Cudy TR3000 (自动增量)
+│   └── build-immortalwrt-cudy-tr3000.yml  # 线 2: Cudy TR3000 (自动增量)
 ├── scripts/
-│   └── verify-firmware.sh                 # 产物层校验 + 归档 (三条线共用)
+│   └── verify-firmware.sh                 # 产物层校验 + 归档 (两条线共用)
 ├── ponwrt-extra.config / -diy-part1.sh / -diy-part2.sh
 ├── ponwrt-feeds.conf                      # feeds 定版
 ├── ponwrt-required-packages.txt           # 关键包清单 (校验用)
-├── immortalwrt-extra.config / -diy-part1.sh / -diy-part2.sh
-├── immortalwrt-required-packages.txt
 ├── cudy-tr3000-extra.config / -diy-part2.sh
 ├── cudy-tr3000-required-packages.txt
 ├── cudy-tr3000.last-built-ref             # 已编译的上游版本 (自动回写)

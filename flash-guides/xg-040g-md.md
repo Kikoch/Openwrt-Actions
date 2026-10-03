@@ -1,6 +1,6 @@
 # Nokia XG-040G-MD (UBI) 刷机指南
 
-适用本仓库两条工作流的产物（PonWrt 稳定版 / ImmortalWrt master 实验版），机型选择一律选 **XG-040G-MD**。
+适用本仓库 Build PonWrt XG-040G-MD 工作流的产物，机型选择一律选 **XG-040G-MD**。
 
 > 参考来源：[Loong1996/ImmortalWrt-Airoha 网页 U-Boot 指南](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)（XG-040G-MD 实机验证）、本仓库刷机实测记录。
 
@@ -85,7 +85,11 @@ sysupgrade -n /tmp/xxx-squashfs-sysupgrade.itb
 
 | 工作流 | 产物 | 用途 |
 |---|---|---|
-| Build PonWrt XG-040G-MD（主力） | `ponwrt-...-nokia_xg-040g-md-ubi-...-sysupgrade.itb` | 日常升级/刷入（当前在用） |
-| Build ImmortalWrt XG-040G-MD（实验） | `*-sysupgrade.itb` / `*-initramfs-recovery.itb` / `*-preloader.bin` / `*-bl31-uboot.fip` | 试跑验证 → 正式落盘；首次迁移用这套引导文件 |
+| Build PonWrt XG-040G-MD | `ponwrt-...-nokia_xg-040g-md-ubi-...-sysupgrade.itb` / `...-initramfs-recovery.itb` | 日常升级 / 首次刷入（当前在用） |
 
-PonWrt 工作流不产出独立 preloader/FIP，首次迁移用 ImmortalWrt 工作流的引导文件；引导链均为 AN7581 UBI 布局，通用。
+> [!warning] 首次迁移的引导文件不再由本仓库产出
+> 原 Build ImmortalWrt XG-040G-MD（实验）工作流已删除，它曾是 `preloader.bin` /
+> `bl31-uboot.fip` 的来源。PonWrt 工作流不产出独立 preloader/FIP。
+> 首次从原厂迁移所需的 [Airoha Web U-Boot 1.1.0](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)
+> 引导文件请直接从 Loong1996 的恢复指南获取（引导链同为 AN7581 UBI 布局，通用）。
+> 需要恢复该工作流时用 `git revert` 找回 commit 9037177 之后的删除提交。

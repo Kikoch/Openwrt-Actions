@@ -4,7 +4,7 @@
 
 | 设备 | 指南 | 编译工作流 |
 |---|---|---|
-| Nokia XG-040G-MD (UBI) | [xg-040g-md.md](xg-040g-md.md) | Build PonWrt XG-040G-MD（主力）/ Build ImmortalWrt XG-040G-MD（实验） |
+| Nokia XG-040G-MD (UBI) | [xg-040g-md.md](xg-040g-md.md) | Build PonWrt XG-040G-MD |
 | Cudy TR3000 | [cudy-tr3000.md](cudy-tr3000.md) | Build ImmortalWrt Cudy TR3000 |
 
 固件从对应 workflow run 页面底部 **Artifacts** 下载，目录内为 `*-squashfs-sysupgrade.itb` / `*-factory.bin` 等镜像。
