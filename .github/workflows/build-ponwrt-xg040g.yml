@@ -183,8 +183,20 @@ jobs:
         echo "$(nproc) thread compile"
         # 多级回退; 全部失败必须让步骤报错, 否则会被当成成功继续走上传
         make -j$(nproc) || make -j1 || make -j1 V=s || exit 1
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        # DEVICE_NAME 必须是单行。多行写进 $GITHUB_ENV 会被 runner 拒绝:
+        #   "Invalid format '<第二行>'" + "Unable to process file command 'env'"
+        # 并且会直接把整个编译步骤判成失败 (run #15 就是这么挂的,
+        # 后面 Verify / 上传 / Release 全被 skipped)。
+        # 优先取期望的 profile, 取不到再退回第一个, 保证永远单行。
+        DEVICE_LIST="$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | sort -u)"
+        DEVICE_OUT=""
+        if printf '%s\n' "$DEVICE_LIST" | grep -qx '${{ env.EXPECT_PROFILE }}'; then
+          DEVICE_OUT='${{ env.EXPECT_PROFILE }}'
+        else
+          DEVICE_OUT="$(printf '%s\n' "$DEVICE_LIST" | head -1)"
+        fi
+        echo "构建设备: $DEVICE_OUT (全部命中: $(printf '%s' "$DEVICE_LIST" | tr '\n' ' '))"
+        [ -n "$DEVICE_OUT" ] && echo "DEVICE_NAME=$DEVICE_OUT" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Verify firmware (产物层校验 + 归档)
