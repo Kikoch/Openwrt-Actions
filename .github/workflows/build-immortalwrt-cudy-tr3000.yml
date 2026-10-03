@@ -212,6 +212,34 @@ jobs:
       if: (!cancelled())
       run: df -hT
 
+    - name: Collect QModem standalone apks
+      # QModem 已 =y 编进固件; 这里额外把 qmodem feed 产出的独立 apk 收出来,
+      # 便于在别的机器上 apk add 单独安装 (不必重刷固件)
+      id: qmodem_apk
+      if: (!cancelled()) && steps.verify.outcome == 'success'
+      run: |
+        mkdir -p qmodem-apk
+        found=0
+        for f in openwrt/bin/packages/*/qmodem/*.apk; do
+          [ -e "$f" ] || continue
+          cp "$f" qmodem-apk/
+          found=$((found + 1))
+        done
+        echo "收集到 $found 个 QModem apk"
+        if [ "$found" -eq 0 ]; then
+          echo "::warning::没有找到 qmodem feed 的 apk, 检查一下 feeds 是否安装成功"
+          ls openwrt/bin/packages/ 2>/dev/null || true
+        fi
+        ls -l qmodem-apk
+        echo "count=$found" >> $GITHUB_OUTPUT
+
+    - name: Upload QModem apks
+      uses: actions/upload-artifact@v5
+      if: (!cancelled()) && steps.qmodem_apk.outputs.count != '0'
+      with:
+        name: QModem_apk_${{ env.REPO_BRANCH }}_${{ env.FILE_DATE }}
+        path: qmodem-apk
+
     - name: Upload bin directory
       uses: actions/upload-artifact@v5
       if: env.UPLOAD_BIN_DIR == 'true' && !cancelled()
@@ -247,12 +275,18 @@ jobs:
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ImmortalWrt_CudyTR3000_${{ env.FILE_DATE }}
-        files: ${{ env.FIRMWARE }}/*
+        files: |
+          ${{ env.FIRMWARE }}/*
+          qmodem-apk/*.apk
         body: |
           ImmortalWrt ${{ env.REPO_BRANCH }} 云编译固件 - Cudy TR3000
           上游 commit: ${{ env.SOURCE_SHA }}
-          含 QModem 模组管理套件 (luci-app-qmodem / qmodem / tom_modem / quectel-CM-5G-M)
           编译时间: ${{ env.FILE_DATE }}
+          profile: ${{ github.event.inputs.profile || env.DEFAULT_PROFILE }}
+          组件: QModem 模组管理套件、OpenClash、zram-swap、adblock-fast、WireGuard
+          已移除: DDNS
+          已通过产物校验 (profile / 板名 / 关键包 manifest)
+          另附 QModem 独立 apk, 可在其它机器上 apk add 安装
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

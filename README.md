@@ -36,7 +36,9 @@
   - `cudy_tr3000-v1` 原厂分区布局（默认）
   - `cudy_tr3000-256mb-v1` 256MB 内存版
   - `cudy_tr3000-v1-ubootmod` 已刷 OpenWrt U-Boot
-- **内置**: 中文 LuCI、OpenClash、zram-swap、adblock-fast 及依赖、QModem 套件（[FUjr/QModem](https://github.com/FUjr/QModem)，src-link 作 feed）、WireGuard、DDNS
+- **内置**: 中文 LuCI、OpenClash、zram-swap、adblock-fast 及依赖、QModem 套件（[FUjr/QModem](https://github.com/FUjr/QModem)，src-link 作 feed）、WireGuard
+- **已移除**: DDNS（luci-app-ddns / ddns-scripts*，2026-10-03）
+- **额外产物**: QModem 独立 apk（`QModem_apk_*` artifact，随 Release 发布），可在其它机器上 `apk add` 安装，不必重刷固件
 
 ## 产物层校验（本仓库的关键机制）
 

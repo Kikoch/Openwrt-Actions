@@ -87,9 +87,17 @@ sysupgrade -n /tmp/xxx-squashfs-sysupgrade.itb
 |---|---|---|
 | Build PonWrt XG-040G-MD | `ponwrt-...-nokia_xg-040g-md-ubi-...-sysupgrade.itb` / `...-initramfs-recovery.itb` | 日常升级 / 首次刷入（当前在用） |
 
-> [!warning] 首次迁移的引导文件不再由本仓库产出
-> 原 Build ImmortalWrt XG-040G-MD（实验）工作流已删除，它曾是 `preloader.bin` /
-> `bl31-uboot.fip` 的来源。PonWrt 工作流不产出独立 preloader/FIP。
-> 首次从原厂迁移所需的 [Airoha Web U-Boot 1.1.0](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)
-> 引导文件请直接从 Loong1996 的恢复指南获取（引导链同为 AN7581 UBI 布局，通用）。
-> 需要恢复该工作流时用 `git revert` 找回 commit 9037177 之后的删除提交。
+> [!note] 引导文件来源：[pbs05/uboot-an758x](https://github.com/pbs05/uboot-an758x)
+> XG-040G-MD 用的 U-Boot 来自这个仓库（带中英文 Web 恢复页面），构建目标 `xg-040g-md`，
+> 产物是 `*-preloader.bin`（或 `*-firstblock.bin`）+ `*-bl31-u-boot.fip`。
+> 本仓库的 PonWrt 工作流只产 sysupgrade / recovery 的 `.itb`，**不产 U-Boot**。
+>
+> - 自动刷机：在原厂系统跑 [AN758x-Stock2UBI](https://github.com/pbs05/an758x-stock2ubi)，
+>   先备份分区，再上传 preloader + FIP
+> - 手动刷机：NAND `0x0` 写 `*-firstblock.bin`，或跳过前 `0x800` 字节从 `0x800` 写
+>   `*-preloader.bin`；BL2 要 FIP 时按 `x` 用 XMODEM 传 `*-bl31-u-boot.fip`
+> - 进 U-Boot 后插网线开 `http://192.168.0.1/`（首次启动约 1 分钟）。首次安装选
+>   **重建 UBI** → 写 FIP → 恢复板级数据卷（`bosa`/`ri`）→ 传 sysupgrade 镜像 → **启动系统**
+> - 后续升级直接选 **刷写系统**
+>
+> 该 U-Boot 是上游项目，与本仓库的编译线无关，版本需自行跟进。
