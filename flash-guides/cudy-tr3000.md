@@ -2,28 +2,38 @@
 
 适用本仓库 **Build ImmortalWrt Cudy TR3000** 工作流产物（ImmortalWrt 稳定分支，含 QModem 套件）。
 
-## 0. 三种固件变体对应三种设备状态
+## 0. 先确认你的机器是哪种分区布局
 
-| 你的机器当前状态 | 用哪个 profile |
-|---|---|
-| 原厂固件，未刷过 | `cudy_tr3000-v1`（原厂分区布局）的 **factory 镜像** |
-| 原厂固件，256MB 内存版 | `cudy_tr3000-256mb-v1` 的 **factory 镜像** |
-| 已刷 OpenWrt U-Boot（v1-ubootmod） | `cudy_tr3000-v1-ubootmod` 的 **sysupgrade 镜像** |
+在设备上执行（SSH 或 LuCI 的命令行）：
 
-看错分区布局强刷会变砖，不确定就先在 Cudy 官网按 SN/型号确认硬件版本。
+```sh
+cat /tmp/sysinfo/board_name    # 或: cat /etc/board.json | grep -i model
+```
 
-### 镜像类型速查（factory / initramfs / sysupgrade）
-
-| 当前状态 | 目标 | 用哪个镜像 |
+| `board_name` 输出 | 分区布局 | 该用哪个 profile |
 |---|---|---|
-| 原厂固件 | OpenWrt（原厂分区） | `*-factory.bin`（原厂 Web 升级入口） |
-| 原厂固件 | OpenWrt（ubootmod） | 先刷 `*-initramfs-*` 进内存系统，再迁移 U-Boot（见 2.3），最后刷 `*-sysupgrade.bin` |
-| OpenWrt（原厂分区） | 更新版本 | `*-sysupgrade.bin`（**必须**是 v1/256mb-v1 的） |
-| OpenWrt（ubootmod） | 更新版本 | `*-sysupgrade.bin`（**必须**是 ubootmod 的） |
+| `cudy,tr3000-v1` | 原厂分区 | **cudy_tr3000-v1** |
+| `cudy,tr3000-256mb-v1` | 原厂分区（256MB 内存版） | **cudy_tr3000-256mb-v1** |
+| `cudy,tr3000-v1-ubootmod` | OpenWrt U-Boot 布局 | **cudy_tr3000-v1-ubootmod** |
 
-- `factory`：给**原厂固件**的 Web 升级界面刷的；
-- `initramfs`：只在内存中启动、不写闪存，用于过渡与救援；
-- `sysupgrade`：**只能**在已经运行 OpenWrt 的系统里刷，profile 与分区布局不匹配会被 image check 拒绝（这是保护，不是 bug）。
+**读出来是什么就刷什么**，猜错会被 sysupgrade 的 image check 直接拒绝（这是保护，不是 bug）。
+
+> ⚠️ 一次云编译只产出一个 profile：`make defconfig` 会把多个 `DEVICE_*` 收敛成最后一个。
+> 本仓库默认构建 `cudy_tr3000-v1`（原厂分区）；要 ubootmod / 256mb 版，用
+> workflow_dispatch 的 `profile` 选项手动触发一次，或改 `cudy-tr3000-diy-part2.sh`。
+
+### 镜像类型速查（产物文件名）
+
+| 当前状态 | 用哪个镜像 |
+|---|---|
+| 已跑 OpenWrt（原厂分区，v1） | `immortalwrt-*-mediatek-filogic-cudy_tr3000-v1-squashfs-sysupgrade.bin` |
+| 已跑 OpenWrt（原厂分区，256mb） | `...-cudy_tr3000-256mb-v1-squashfs-sysupgrade.bin` |
+| 已跑 OpenWrt（ubootmod） | `...-cudy_tr3000-v1-ubootmod-squashfs-sysupgrade.itb` |
+| 原厂固件 → OpenWrt（首次） | 见 2.2：25.12 里 v1/256mb-v1 **没有 factory 镜像**，走 ubootmod 迁移或 TFTP initramfs |
+
+- `sysupgrade`：只能在已运行 OpenWrt 的系统里刷；
+- `initramfs-recovery.itb`：只在内存启动、不写闪存，用于过渡/救援（ubootmod 产物）；
+- `preloader.bin` + `bl31-uboot.fip`：OpenWrt U-Boot 本体，迁移 ubootmod 用。
 
 ## 1. 刷机前备份
 
@@ -46,10 +56,22 @@ sysupgrade -n /tmp/cudy_tr3000-v1-ubootmod-squashfs-sysupgrade.bin
 
 ### 2.2 原厂固件 → OpenWrt（首次刷机）
 
-1. 下载对应 profile 的 `*-factory.bin`（或 initramfs 镜像用于先试跑）
-2. 原厂 Web 管理页 → 固件升级 → 上传 factory 镜像
-3. 刷完重启进入 ImmortalWrt（默认 `192.168.1.1`，无密码）
-4. **首次进系统后建议立即设置 root 密码**（LuCI → 系统 → 管理权限）
+ImmortalWrt 25.12 的 `cudy_tr3000-v1` / `cudy_tr3000-256mb-v1` **只产出 sysupgrade 镜像，没有 factory 镜像**，原厂 Web 界面刷不了。两条路：
+
+**路线 A（推荐，一次性到位）：直接迁移到 ubootmod**
+
+1. 手动触发 workflow，`profile` 选 `cudy_tr3000-v1-ubootmod`，拿到 `preloader.bin`、`bl31-uboot.fip`、`initramfs-recovery.itb`、`squashfs-sysupgrade.itb`
+2. 用 Cudy 原厂恢复/TFTP 或按 2.3 的方式写入 U-Boot
+3. 进 ubootmod 的 recovery 页面刷 `...-ubootmod-squashfs-sysupgrade.itb`
+4. 之后永远刷 ubootmod 镜像
+
+**路线 B：先跑 initramfs 再 sysupgrade（原厂分区）**
+
+1. TFTP 起 `...-initramfs-recovery.itb`（若该 profile 产物里有）
+2. 在内存系统里 `sysupgrade -n ...-cudy_tr3000-v1-squashfs-sysupgrade.bin`
+3. 此后只能刷 v1 的 sysupgrade 镜像
+
+> 原厂分区布局镜像容量上限 64MB（`cudy_tr3000-v1`），后续想扩容只能走 ubootmod。
 
 > 原厂分区布局可用容量较小，若 factory 刷入后空间不足/异常，可走 initramfs → ubootmod 迁移路线（见 2.3）。
 

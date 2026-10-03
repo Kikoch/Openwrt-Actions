@@ -26,6 +26,15 @@ on:
         description: "跳过上游更新检查, 强制编译 (yes/no)"
         required: false
         default: "no"
+      profile:
+        description: "设备 profile (一次构建只出一个 profile)"
+        required: false
+        default: "cudy_tr3000-v1"
+        type: choice
+        options:
+          - cudy_tr3000-v1
+          - cudy_tr3000-256mb-v1
+          - cudy_tr3000-v1-ubootmod
   push:
     branches:
       - main
@@ -138,6 +147,9 @@ jobs:
         ./scripts/feeds install -a -p qmodem
 
     - name: Load custom configuration (设备 + QModem 套件)
+      env:
+        # 非手动触发时为空, diy-part2.sh 回退到原厂分区布局 cudy_tr3000-v1
+        PROFILE: ${{ github.event.inputs.profile }}
       run: |
         [ -e files ] && mv files openwrt/files
         chmod +x $DIY_P2_SH

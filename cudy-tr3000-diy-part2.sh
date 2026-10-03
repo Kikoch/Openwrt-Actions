@@ -4,15 +4,22 @@
 set -e
 
 # 1. 目标设备: Cudy TR3000 (mediatek/filogic, MT7981B)
-#    - v1:          原厂分区布局 (256MB? 标准版, 直接从原厂刷)
-#    - 256mb-v1:    256MB 内存版 (原厂分区布局)
-#    - v1-ubootmod: OpenWrt U-Boot 布局 (已刷过 U-Boot 的机器用)
-cat > .config << 'EOF'
+#    一次构建只能出一个 profile: make defconfig 会把多个 DEVICE_* 收敛成
+#    最后一个 (曾导致只产出 ubootmod 镜像, 原厂分区机器刷不了)。
+#    用 PROFILE 环境变量指定, 可选值:
+#      - cudy_tr3000-v1          原厂分区布局 (设备上报 cudy,tr3000-v1)
+#      - cudy_tr3000-256mb-v1    256MB 内存版 (原厂分区布局)
+#      - cudy_tr3000-v1-ubootmod 已刷 OpenWrt U-Boot 的机器
+PROFILE="${PROFILE:-cudy_tr3000-v1}"
+case "$PROFILE" in
+  cudy_tr3000-v1|cudy_tr3000-256mb-v1|cudy_tr3000-v1-ubootmod) ;;
+  *) echo "FATAL: 未知 PROFILE=$PROFILE"; exit 1 ;;
+esac
+echo "=== 构建 profile: $PROFILE ==="
+cat > .config << EOF
 CONFIG_TARGET_mediatek=y
 CONFIG_TARGET_mediatek_filogic=y
-CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1=y
-CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-256mb-v1=y
-CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3000-v1-ubootmod=y
+CONFIG_TARGET_mediatek_filogic_DEVICE_${PROFILE}=y
 EOF
 
 # 2. 追加附加包（QModem 套件 + 中文, 见 cudy-tr3000-extra.config）
