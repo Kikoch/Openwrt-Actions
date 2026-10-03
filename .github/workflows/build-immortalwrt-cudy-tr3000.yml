@@ -44,6 +44,10 @@ on:
       - "cudy-tr3000-diy-part2.sh"
       - "cudy-tr3000-required-packages.txt"
       - "scripts/verify-firmware.sh"
+      # 构建配方自身改动也要真编一次:
+      # 若只改 workflow 文件而 paths 不匹配, GitHub 会静默不触发,
+      # 配方写错了也没人发现 (2026-10-03 的重复 permissions 就是这么埋进去的)
+      - ".github/workflows/build-immortalwrt-cudy-tr3000.yml"
   schedule:
     # UTC 21:30 = 北京时间 05:30, 每日探测一次上游稳定分支
     - cron: "30 21 * * *"
@@ -51,6 +55,12 @@ on:
 permissions:
   contents: write
   actions: write
+
+concurrency:
+  # 单次构建约 3.5 小时。新 push 直接取消未完成的旧构建,
+  # 避免几个大构建并行、最后只有一份产物有用。
+  group: tr3000-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   REPO_URL: https://github.com/ImmortalWrt/ImmortalWrt
