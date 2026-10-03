@@ -24,7 +24,8 @@
 
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`（+ `-initramfs-recovery.itb`）
 - **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap（256MB）、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
-- **排除**: luci-app-ttyd、luci-app-iptv（后者为旧编译者私有树内包，公开渠道无源，无法复刻）
+- **2026-10-03 对齐 18.1 路由器**: 新增 luci-app-iptv（在 `pbs05/openwrt-pon-userspace` 里，早期误判为不可复刻）、ruby + ruby-yaml（OpenClash 依赖）、shellsync + kmod-macvlan、luci-mod-admin-full、luci-lib-uqr、autocore、coreutils-nohup、yq、kmod-mppe；移除 qrencode、luci-app-upnp、kmod-usb-xhci-mtk
+- **排除**: luci-app-ttyd
 - **PON 全栈**: `kmod-airoha-en7572` / `kmod-airoha-xpon` / `kmod-airoha-pon-frontend` / `airoha-ponctl` / `airoha-pond` / `luci-app-pon`
 - **已验证**: XG-PON 光口、2.5G LAN（EN8811H）、PPPoE、zram、低内存更新方案（`openclash_lowmem_update.sh`，每日 03:00 停服更新）
 - **手动参数**: `source_ref`（换源码版本）、`pin_feeds`（关闭 feeds 定版）、`skip_verify`（排障用）、`release`
