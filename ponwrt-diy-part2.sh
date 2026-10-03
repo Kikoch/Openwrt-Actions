@@ -13,8 +13,14 @@ set -e
   configs/release.config > .config
 
 # 2. 追加设备选择: 只编 Nokia XG-040G-MD (UBI)
+#    注意符号形态: scripts/target-metadata.pl 只生成
+#      menuconfig TARGET_DEVICE_<target>_<subtarget>_DEVICE_<profile>
+#    即 CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi
+#    之前写成 CONFIG_TARGET_airoha_an7581_DEVICE_... (少一个 DEVICE_ 前缀)
+#    是根本不存在的符号, make defconfig 会静默丢掉 —— 那行一直是死代码,
+#    设备其实是被合并进来的官方 configs/an7581.config 选中的。
 cat >> .config << 'EOF'
-CONFIG_TARGET_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
+CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y
 EOF
 
 # 3. 追加自定义附加包 (OpenClash/DDNS/中文/WireGuard 等)

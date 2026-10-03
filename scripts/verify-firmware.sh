@@ -47,7 +47,9 @@ SOURCE_REF="${SOURCE_REF:-}"
 
 FAIL=0
 note() { printf '%s\n' "$*"; }
-fail() { printf 'FATAL: %s\n' "$*"; FAIL=1; }
+# 同时输出 ::error:: —— GitHub 会把它变成注解, 不用翻几百 MB 日志也能在
+# UI 和 check-runs annotations API 里直接看到失败原因
+fail() { printf 'FATAL: %s\n' "$*"; printf '::error::%s\n' "$*"; FAIL=1; }
 
 # --- 0. 定位产物目录 ---------------------------------------------------
 TARGET_DIR="$(ls -d "$SRC_DIR"/bin/targets/*/* 2>/dev/null | head -1)"
@@ -84,7 +86,14 @@ try:
 except Exception as e:
     print("PARSE_ERROR"); sys.exit(0)
 profiles = data.get("profiles", data) if isinstance(data, dict) else data
-ids = [p.get("id", "") for p in profiles if isinstance(p, dict)]
+# profiles.json 里 profiles 是 {device_id: {...}} 字典
+# (见 scripts/json_add_image_info.py); 老版本可能是 [{"id":..},..] 列表。
+# 两种都要支持 —— 早期按列表遍历字典, 拿到的是 key 字符串,
+# isinstance(p, dict) 全 False, 导致永远判定 profile 不存在。
+if isinstance(profiles, dict):
+    ids = list(profiles.keys())
+else:
+    ids = [p.get("id", "") for p in profiles if isinstance(p, dict)]
 print("YES" if want in ids else "NO")
 PY
 )
@@ -102,10 +111,15 @@ import json, sys
 path, want = sys.argv[1], sys.argv[2]
 data = json.load(open(path))
 profiles = data.get("profiles", data)
-for p in profiles:
-    if isinstance(p, dict) and p.get("id") == want:
-        print(" ".join(p.get("supported_devices", p.get("supported_devices", []))))
-        break
+entry = None
+if isinstance(profiles, dict):
+    entry = profiles.get(want)
+else:
+    for p in profiles:
+        if isinstance(p, dict) and p.get("id") == want:
+            entry = p
+            break
+print(" ".join((entry or {}).get("supported_devices", [])))
 PY
 )
     case " $BOARDS " in
@@ -200,6 +214,25 @@ note "已归档 build-info.txt"
 echo ""
 if [ "$FAIL" -ne 0 ]; then
   echo "=========== 产物校验失败: 不上传固件, 不发布 Release ==========="
+  # 诊断信息: 校验失败时把现场摊开, 免得又要再跑几小时才能定位
+  echo "--- 诊断: 产物目录 ---"
+  ls -l "$TARGET_DIR" 2>/dev/null | head -40
+  echo "--- 诊断: profiles.json 里实际有哪些 profile ---"
+  if [ -f "$PROFILES_JSON" ]; then
+    python3 - "$PROFILES_JSON" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); p = d.get("profiles", d)
+print(list(p.keys()) if isinstance(p, dict) else [x.get("id") for x in p])
+PY
+  else
+    echo "(profiles.json 不存在)"
+  fi
+  echo "--- 诊断: manifest 前 15 行 ---"
+  if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
+    head -15 "$MANIFEST"
+  else
+    echo "(manifest 未定位到)"
+  fi
   exit 1
 fi
 echo "=========== 产物校验通过 ==========="
