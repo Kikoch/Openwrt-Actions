@@ -1,0 +1,12 @@
+# Cudy TR3000 构建的关键包清单 (产物层校验用)
+# 必须出现在固件的 *.manifest 里, 否则 verify-firmware.sh 判定失败。
+
+# 一次构建只出一个 profile, .config 看着对不代表产物对得上;
+# 这条线正是被 make defconfig 收敛 profile 坑过的位置。
+
+luci-app-openclash
+zram-swap
+kmod-zram
+luci-app-adblock-fast
+gawk
+luci-app-qmodem

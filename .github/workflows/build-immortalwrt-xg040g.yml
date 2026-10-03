@@ -30,6 +30,8 @@ on:
       - "immortalwrt-extra.config"
       - "immortalwrt-diy-part1.sh"
       - "immortalwrt-diy-part2.sh"
+      - "immortalwrt-required-packages.txt"
+      - "scripts/verify-firmware.sh"
 
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
@@ -38,8 +40,16 @@ env:
   CONFIG_FILE: immortalwrt-extra.config
   DIY_P1_SH: immortalwrt-diy-part1.sh
   DIY_P2_SH: immortalwrt-diy-part2.sh
+  REQUIRED_PKGS: immortalwrt-required-packages.txt
+  # 产物层校验目标
+  EXPECT_PROFILE: nokia_xg-040g-md-ubi
+  EXPECT_BOARD: nokia,xg-040g-md-ubi
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   build:
@@ -87,6 +97,14 @@ jobs:
         echo "SOURCE_REF=$REF" >> $GITHUB_ENV
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Cache downloads (dl/)
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/dl
+        key: imm-xg-dl-${{ hashFiles('immortalwrt-extra.config', 'immortalwrt-diy-part1.sh', 'immortalwrt-diy-part2.sh') }}
+        restore-keys: |
+          imm-xg-dl-
+
     - name: Run DIY part1 (feeds + DTS 覆盖)
       run: |
         chmod +x $DIY_P1_SH
@@ -119,10 +137,21 @@ jobs:
       run: |
         cd openwrt
         echo "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make -j$(nproc) || make -j1 || make -j1 V=s || exit 1
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Verify firmware (产物层校验 + 归档)
+      id: verify
+      env:
+        SRC_DIR: openwrt
+        EXPECT_PROFILE: ${{ env.EXPECT_PROFILE }}
+        EXPECT_BOARD: ${{ env.EXPECT_BOARD }}
+        REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
+        SOURCE_URL: ${{ env.REPO_URL }}
+        SOURCE_REF: ${{ env.SOURCE_REF }}
+      run: bash scripts/verify-firmware.sh
 
     - name: Check space usage
       if: (!cancelled())
@@ -138,13 +167,21 @@ jobs:
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@v5
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled() && steps.verify.outcome == 'success'
       with:
         name: ImmortalWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
+    - name: Delete old workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ github.token }}
+        repository: ${{ github.repository }}
+        retain_days: 7
+        keep_minimum_runs: 3
+
     - name: Create release
-      if: github.event.inputs.release == 'yes' && !cancelled()
+      if: github.event.inputs.release == 'yes' && !cancelled() && steps.verify.outcome == 'success'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ImmortalWrt_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}

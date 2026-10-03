@@ -42,6 +42,8 @@ on:
     paths:
       - "cudy-tr3000-extra.config"
       - "cudy-tr3000-diy-part2.sh"
+      - "cudy-tr3000-required-packages.txt"
+      - "scripts/verify-firmware.sh"
   schedule:
     # UTC 21:30 = 北京时间 05:30, 每日探测一次上游稳定分支
     - cron: "30 21 * * *"
@@ -55,9 +57,17 @@ env:
   CONFIG_FILE: cudy-tr3000-extra.config
   DIY_P2_SH: cudy-tr3000-diy-part2.sh
   LAST_REF_FILE: cudy-tr3000.last-built-ref
+  REQUIRED_PKGS: cudy-tr3000-required-packages.txt
+  # 产物层校验目标: 一次构建只出一个 profile, 必须确认产物真的就是它
+  # (曾因 make defconfig 收敛到 ubootmod, 产物里根本没有原厂分区的镜像)
+  DEFAULT_PROFILE: cudy_tr3000-v1
   UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   check:
@@ -134,6 +144,14 @@ jobs:
         echo "SOURCE_SHA=$(cd openwrt && git rev-parse HEAD)" >> "$GITHUB_ENV"
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
+    - name: Cache downloads (dl/)
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/dl
+        key: tr3000-dl-${{ hashFiles('cudy-tr3000-extra.config', 'cudy-tr3000-diy-part2.sh') }}
+        restore-keys: |
+          tr3000-dl-
+
     - name: Clone QModem source (拉取 QModem)
       working-directory: /workdir
       run: git clone --depth 1 $QMODEM_URL qmodem
@@ -168,10 +186,27 @@ jobs:
       run: |
         cd openwrt
         echo "$(nproc) thread compile"
-        make -j$(nproc) || make -j1 || make -j1 V=s
+        make -j$(nproc) || make -j1 || make -j1 V=s || exit 1
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=$(head -1 DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Verify firmware (产物层校验 + 归档)
+      id: verify
+      env:
+        SRC_DIR: openwrt
+        # 非手动触发时 input 为空 -> 回退 diy-part2.sh 里同样的默认值
+        EXPECT_PROFILE: ${{ github.event.inputs.profile || env.DEFAULT_PROFILE }}
+        REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
+        SOURCE_URL: ${{ env.REPO_URL }}
+        SOURCE_REF: ${{ env.SOURCE_SHA }}
+        # 本次只编一个 profile, 出现其它 profile 的镜像说明配置被 defconfig 改写
+        FORBID_PROFILES: cudy_tr3000-v1-ubootmod cudy_tr3000-256mb-v1
+      run: |
+        # 期望的 profile 本身不能被列进 FORBID
+        FORBID="$(echo "$FORBID_PROFILES" | tr ' ' '\n' | grep -vx "$EXPECT_PROFILE" | tr '\n' ' ')"
+        export FORBID_PROFILES="$FORBID"
+        bash scripts/verify-firmware.sh
 
     - name: Check space usage
       if: (!cancelled())
@@ -194,13 +229,21 @@ jobs:
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@v5
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled() && steps.verify.outcome == 'success'
       with:
         name: ImmortalWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
+    - name: Delete old workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ github.token }}
+        repository: ${{ github.repository }}
+        retain_days: 7
+        keep_minimum_runs: 3
+
     - name: Create release
-      if: github.event.inputs.release == 'yes' && !cancelled()
+      if: github.event.inputs.release == 'yes' && !cancelled() && steps.verify.outcome == 'success'
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ImmortalWrt_CudyTR3000_${{ env.FILE_DATE }}
