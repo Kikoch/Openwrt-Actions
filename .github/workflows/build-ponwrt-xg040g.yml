@@ -134,6 +134,14 @@ jobs:
         else
           echo "pin_feeds=no，使用源码自带 feeds.conf.default"
         fi
+        # 语法预检: scripts/feeds 的 parse_file 用 s/#.+$// 去注释, 要求 # 后
+        # 至少有一个字符。只有 # 的行不会被剥掉, 随后匹配 src-<type> 失败并 die
+        # (退出码 25), 构建会在前三分钟挂掉且报错很隐晦。这里提前拦住。
+        if grep -nE '^#[[:space:]]*$' openwrt/feeds.conf.default; then
+          echo "FATAL: feeds.conf.default 含只有 # 的行, scripts/feeds 会解析失败 (exit 25)"
+          exit 1
+        fi
+        awk '!/^[[:space:]]*#/ && NF {print "  " $0}' openwrt/feeds.conf.default | head -20
 
     - name: Run DIY part1 (自定义前置脚本)
       run: |
@@ -191,7 +199,9 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      # 必须挂 compile 成功: 只用 !cancelled() 的话, 前面步骤失败后这步照样跑,
+      # cd 进不存在的产物目录 -> 再报一个 exit 1, 把真正的失败原因埋掉
+      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outcome == 'success' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
