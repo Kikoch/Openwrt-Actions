@@ -23,8 +23,8 @@
 ### 1. Build PonWrt XG-040G-MD
 
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`（+ `-initramfs-recovery.itb`）
-- **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
-- **已移除**: zram-swap（2026-10-03。目标机 18.1 是 1G 版、952MB 可用内存，实测无 swap 也用不上；`ponwrt-extra.config` 里保留了注释掉的开关，内存更小的机器取消注释即可恢复）
+- **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
+- **zram 保留说明**: 18.1 那台是 1G 版用不上，但内存更小的同型号设备需要 zram 做 OOM 兜底；内核一变外部 apk 源就没有配套 `kmod-zram`，只能编进固件，所以默认带上（不需要时注释 `ponwrt-extra.config` 里那 5 行，并同步注释 `ponwrt-required-packages.txt` 里的 2 行，否则产物校验会失败）
 - **2026-10-03 对齐 18.1 路由器**: 新增 luci-app-iptv（在 `pbs05/openwrt-pon-userspace` 里，早期误判为不可复刻）、ruby + ruby-yaml（OpenClash 依赖）、shellsync + kmod-macvlan、luci-mod-admin-full、luci-lib-uqr、autocore、coreutils-nohup、yq、kmod-mppe；移除 qrencode、luci-app-upnp、kmod-usb-xhci-mtk
 - **排除**: luci-app-ttyd
 - **PON 全栈**: `kmod-airoha-en7572` / `kmod-airoha-xpon` / `kmod-airoha-pon-frontend` / `airoha-ponctl` / `airoha-pond` / `luci-app-pon`

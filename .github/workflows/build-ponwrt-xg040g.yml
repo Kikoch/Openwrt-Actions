@@ -69,6 +69,12 @@ permissions:
   contents: write
   actions: write
 
+concurrency:
+  # 配置类文件改得频繁, 新 push 直接取消未完成的旧构建,
+  # 避免几个 2 小时的构建并行跑、最后只留一个有用的产物
+  group: ponwrt-xg-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-24.04

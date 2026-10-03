@@ -2,7 +2,7 @@
 # 这些包必须出现在固件的 *.manifest 里, 否则 verify-firmware.sh 判定失败,
 # 不上传 artifact、不发布 Release。
 #
-# 只列"缺了就废"的包: PON 光口、2.5G PHY、NPU 固件。
+# 只列"缺了就废"的包: PON 光口、2.5G PHY、NPU 固件、zram。
 # 不要往这里塞可选包 —— 那会让校验变成噪音。
 
 # PON 全栈 (光口失效 = 这台机器失去意义)
@@ -20,8 +20,9 @@ airoha-en8811h-firmware
 # NPU 固件
 airoha-en7581-npu-firmware
 
-# 注: zram-swap / kmod-zram 已于 2026-10-03 移出配置 (18.1 是 1G 版,
-# 952MB 可用内存用不上 zram)。若恢复 zram, 把这两行加回来,
-# 否则 verify-firmware.sh 会因 manifest 缺包而判定失败。
-# zram-swap
-# kmod-zram
+# zram: 小内存设备 OOM 兜底。
+# 内核版本一变, 外部 apk 源里就没有配套的 kmod-zram, 只能随固件编。
+# 若在 ponwrt-extra.config 里注释掉 zram 的包, 必须同时注释掉这两行,
+# 否则 verify-firmware.sh 会因 manifest 缺包判定失败。
+zram-swap
+kmod-zram
