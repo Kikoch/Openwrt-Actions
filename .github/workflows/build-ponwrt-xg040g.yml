@@ -70,10 +70,11 @@ permissions:
   actions: write
 
 concurrency:
-  # 配置类文件改得频繁, 新 push 直接取消未完成的旧构建,
-  # 避免几个 2 小时的构建并行跑、最后只留一个有用的产物
+  # cancel-in-progress 由 true 改为 false: 新 push 不再砍掉已经跑了一半的构建,
+  # 而是排队等它跑完。一次编译接近两小时, 中途被砍等于前面的机时全部作废;
+  # 代价是连续多次 push 会排成一串。想要"只留最新"就把这行改回 true。
   group: ponwrt-xg-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   build:

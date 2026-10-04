@@ -79,7 +79,8 @@ echo "=== 关键驱动校验通过 ==="
 for pkg in luci-app-openclash luci-app-adblock-fast luci-app-iptv ; do
   if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
     echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
-    echo "       (ponwrt-feeds.conf 配了吗? scripts/feeds install -a 跑了吗?)"
+    echo "       luci pin 落在 ed0441b1(2026-10-02 merge) 之前的话, openclash 等"
+    echo "       第三方 LuCI 应用是不存在的; 另外确认 scripts/feeds install -a 跑过"
     exit 1
   fi
 done
