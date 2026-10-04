@@ -82,6 +82,8 @@ jobs:
         run: |
           set -e
           TAG="${TAG:-$DEFAULT_TAG}"
+          echo "gh 版本: $(gh --version | head -1)"
+          echo "仓库根: $(git rev-parse --show-toplevel 2>&1)"
           cd out
           # artifact 会被放进以 artifact 名命名的子目录, 全部平铺上传
           mapfile -t FILES < <(find . -type f | sort)
@@ -123,10 +125,19 @@ jobs:
           # 去掉每行前面的缩进(heredoc 为了对齐加了空格)
           sed -i 's/^          //' /tmp/notes.md
 
-          gh release create "$TAG" \
+          # 失败时把 gh 的真实报错做成注解, 不用翻日志
+          set +e
+          OUT="$(gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "$TITLE" \
             --notes-file /tmp/notes.md \
-            "${FILES[@]}"
+            "${FILES[@]}" 2>&1)"
+          RC=$?
+          set -e
+          echo "$OUT"
+          if [ "$RC" -ne 0 ]; then
+            echo "::error::gh release create 失败 (exit $RC): $(printf '%s' "$OUT" | tail -3 | tr '\n' ' ')"
+            exit 1
+          fi
 
           echo "Release 已创建: https://github.com/${{ github.repository }}/releases/tag/$TAG"
