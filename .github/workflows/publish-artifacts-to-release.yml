@@ -77,18 +77,29 @@ jobs:
           set -e
           cd out
           rm -rf flat && mkdir -p flat
-          # GitHub Release 附件名必须唯一(扁平命名空间)。
-          # 先按 basename 放, 撞名的用 "父目录_文件名"。
+          # GitHub Release 附件名是扁平命名空间, 且**大小写不敏感**:
+          # 产物里同时有 OpenWrt 生成的 sha256sums 和我们归档的 SHA256SUMS,
+          # 直接上传会 422 "ReleaseAsset.name already exists"。
+          # 判重用小写键; 撞名先退化为 "父目录_文件名", 还撞就加序号。
+          declare -A SEEN
           while IFS= read -r f; do
             rel="${f#./}"
             base="$(basename "$rel")"
-            if [ -e "flat/$base" ]; then
-              new="$(printf '%s' "$rel" | tr '/' '_')"
-              echo "重名, 改名: $rel -> $new"
-              cp "$f" "flat/$new"
-            else
-              cp "$f" "flat/$base"
+            cand="$base"
+            key="$(printf '%s' "$cand" | tr 'A-Z' 'a-z')"
+            if [ -n "${SEEN[$key]:-}" ]; then
+              cand="$(printf '%s' "$rel" | tr '/' '_')"
+              key="$(printf '%s' "$cand" | tr 'A-Z' 'a-z')"
             fi
+            n=2
+            while [ -n "${SEEN[$key]:-}" ]; do
+              cand="${base}__${n}"
+              key="$(printf '%s' "$cand" | tr 'A-Z' 'a-z')"
+              n=$((n + 1))
+            done
+            SEEN[$key]=1
+            [ "$cand" != "$base" ] && echo "重名, 改名: $rel -> $cand"
+            cp "$f" "flat/$cand"
           done < <(find . -type f -not -path './flat/*' | sort)
           echo "=== 摊平后 (上传清单) ==="
           find flat -type f -printf '%10s  %f\n' | sort -k2
