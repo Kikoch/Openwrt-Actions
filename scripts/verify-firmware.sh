@@ -15,8 +15,9 @@
 #   2. profiles.json 里存在期望的 profile id
 #   3. 存在文件名含期望 profile 的镜像            <- 挡住 defconfig 收敛事故
 #   4. (可选) 该 profile 的 supported_devices 含期望板名
-#   5. (可选) *.manifest 里含全部关键包
-#   6. (可选) 不允许出现的 profile 没有混进产物
+#   5. (可选) *.manifest 里含全部关键包       <- REQUIRED_PKGS
+#   6. (可选) 不允许出现的 profile 没有混进产物 <- FORBID_PROFILES
+#   7. (可选) *.manifest 里不含指定要剔除的包  <- FORBID_PKGS
 #
 # 归档 (写进产物目录, 随 artifact 一起上传):
 #   build.config     defconfig 后实际生效的完整配置
@@ -28,6 +29,7 @@
 #   EXPECT_PROFILE=nokia_xg-040g-md-ubi \
 #   EXPECT_BOARD=nokia,xg-040g-md-ubi \
 #   REQUIRED_PKGS=ponwrt-required-packages.txt \
+#   FORBID_PKGS="luci-app-upnp miniupnpd-nftables" \
 #   SOURCE_URL=https://github.com/pbs05/ponwrt \
 #   SOURCE_REF=<sha> \
 #   bash scripts/verify-firmware.sh
@@ -41,6 +43,7 @@ SRC_DIR="${SRC_DIR:-openwrt}"
 EXPECT_PROFILE="${EXPECT_PROFILE:?EXPECT_PROFILE 必填}"
 EXPECT_BOARD="${EXPECT_BOARD:-}"
 REQUIRED_PKGS="${REQUIRED_PKGS:-}"
+FORBID_PKGS="${FORBID_PKGS:-}"
 FORBID_PROFILES="${FORBID_PROFILES:-}"
 SOURCE_URL="${SOURCE_URL:-}"
 SOURCE_REF="${SOURCE_REF:-}"
@@ -174,6 +177,19 @@ if [ -n "$REQUIRED_PKGS" ] && [ -f "$REQUIRED_PKGS" ]; then
       note "关键包全部命中 ✓"
     fi
   fi
+fi
+
+# --- 5b. 禁止出现的包 (manifest 层反向校验) -------------------------
+# .config 看着关掉了不代表产物里没有: 依赖链里的 package 仍可能把它重新
+# select 回来。run #16 就是官方 release.config 的 luci-app-upnp 漏进来。
+# 在 require/forbid 两处都对包源把关, 免得同一类事故反复发生。
+if [ -n "$FORBID_PKGS" ] && [ -n "${MANIFEST:-}" ] && [ -f "${MANIFEST:-}" ]; then
+  for pkg in $FORBID_PKGS; do
+    if grep -q "^${pkg} " "$MANIFEST" || grep -q "^${pkg}$" "$MANIFEST"; then
+      fail "manifest 里出现了不该有的包 '$pkg' (该组件应已从固件移除)"
+    fi
+  done
+  [ "$FAIL" -eq 0 ] && note "禁止包均已确认不在产物中 ✓"
 fi
 
 # --- 归档: build.config / SHA256SUMS / build-info.txt ------------------

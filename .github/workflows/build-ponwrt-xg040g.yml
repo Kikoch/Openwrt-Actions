@@ -207,6 +207,9 @@ jobs:
         EXPECT_PROFILE: ${{ env.EXPECT_PROFILE }}
         EXPECT_BOARD: ${{ env.EXPECT_BOARD }}
         REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
+        # 官方 configs/release.config 自带 luci-app-upnp, 已在 extra.config 里
+        # 反向覆盖; 这里在产物层再卡一道, 防止依赖链把它 select 回来
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
       run: bash scripts/verify-firmware.sh

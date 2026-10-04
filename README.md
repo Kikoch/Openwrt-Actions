@@ -24,8 +24,10 @@
 
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`（+ `-initramfs-recovery.itb`）
 - **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
+- **OpenClash 来自独立 feed**: [vernesong/OpenClash](https://github.com/vernesong/OpenClash)（pin `c3a33c1d`，tag v0.47.156），加在 `ponwrt-feeds.conf`。固定的 ImmortalWrt luci / packages feed 里**都没有**这个包 —— 只在 `ponwrt-extra.config` 写 `=y` 的话，`make defconfig` 会把它当未知符号静默删掉，编译照样成功、固件里一个字节都没有（run #16 教训）
 - **zram 保留说明**: 18.1 那台是 1G 版用不上，但内存更小的同型号设备需要 zram 做 OOM 兜底；内核一变外部 apk 源就没有配套 `kmod-zram`，只能编进固件，所以默认带上（不需要时注释 `ponwrt-extra.config` 里那 5 行，并同步注释 `ponwrt-required-packages.txt` 里的 2 行，否则产物校验会失败）
 - **2026-10-03 对齐 18.1 路由器**: 新增 luci-app-iptv（在 `pbs05/openwrt-pon-userspace` 里，早期误判为不可复刻）、ruby + ruby-yaml（OpenClash 依赖）、shellsync + kmod-macvlan、luci-mod-admin-full、luci-lib-uqr、autocore、coreutils-nohup、yq、kmod-mppe；移除 qrencode、luci-app-upnp、kmod-usb-xhci-mtk
+- **UPnP 的移除要注意 kconfig 顺序**: 官方 `configs/release.config` 自带 `CONFIG_PACKAGE_luci-app-upnp=y`，base 在前、`ponwrt-extra.config` 在后，同名符号取最后一条 —— 所以必须在 extra.config 里显式写 `# CONFIG_PACKAGE_luci-app-upnp is not set` 反向覆盖，光把上行删掉无效（run #16 产物里 upnp 三件套照样在）。`verify-firmware.sh` 另有一道 `FORBID_PKGS` 产物层反向校验
 - **排除**: luci-app-ttyd
 - **PON 全栈**: `kmod-airoha-en7572` / `kmod-airoha-xpon` / `kmod-airoha-pon-frontend` / `airoha-ponctl` / `airoha-pond` / `luci-app-pon`
 - **已验证**: XG-PON 光口、2.5G LAN（EN8811H）、PPPoE、低内存更新方案（`openclash_lowmem_update.sh`，每日 03:00 停服更新）

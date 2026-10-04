@@ -71,6 +71,31 @@ if [ -n "$MISSING" ]; then
 fi
 echo "=== 关键驱动校验通过 ==="
 
+# 强校验: 用户显式要求的包必须在 defconfig 之后还活着。
+# 为什么必须查: make defconfig 对不存在的 CONFIG_PACKAGE_xxx 符号的处理就是
+#   —— 默默删掉那一行。编译照 green, 固件里就是没有。run #16 的 openclash
+#   就是这么失踪的 (固定的 luci/packages feed 里压根没这个包)。这里几十秒挡住,
+#   省得白编两小时再靠 manifest 反查。
+for pkg in luci-app-openclash luci-app-adblock-fast luci-app-iptv ; do
+  if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
+    echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
+    echo "       (ponwrt-feeds.conf 配了吗? scripts/feeds install -a 跑了吗?)"
+    exit 1
+  fi
+done
+echo "=== 指定包含的包全部命中: openclash / adblock-fast / iptv ==="
+
+# 强校验: UPnP 必须真的关掉。官方 configs/release.config 自带
+# CONFIG_PACKAGE_luci-app-upnp=y, 只在 ponwrt-extra.config 里删掉那一行没用,
+# 必须写 "# ... is not set" 反向覆盖。这里确认覆盖真生效了。
+UPNP_ON="$(grep -E '^CONFIG_PACKAGE_(luci-app-upnp|luci-i18n-upnp-zh-cn|miniupnpd-nftables|miniupnpd-iptables)=y' .config || true)"
+if [ -n "$UPNP_ON" ]; then
+  echo "FATAL: UPnP 组件仍然开着 (release.config 的 base 值没覆盖掉):"
+  printf '%s\n' "$UPNP_ON"
+  exit 1
+fi
+echo "=== UPnP 已确认关闭 ==="
+
 # 提醒: /etc/config/pon 的 schema 随 pon_userspace 演进 (huawei_compat 已改名
 # disable_enhanced_security, 新增 registration_id/loid_password)。刷机后不要
 # 恢复旧固件的 /etc/config/pon, 否则密码(PLOAM Registration-ID)字段缺失,

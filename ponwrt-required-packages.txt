@@ -26,3 +26,8 @@ airoha-en7581-npu-firmware
 # 否则 verify-firmware.sh 会因 manifest 缺包判定失败。
 zram-swap
 kmod-zram
+
+# 用户指定必须包含的 LuCI 应用。
+# openclash: run #16 时包既没进 feed 也没进产物, 刷完才发现没有代理可用。
+#            现在 diy-part2 有编译前校验, 这里再做一道产物层校验, 双重保险。
+luci-app-openclash
