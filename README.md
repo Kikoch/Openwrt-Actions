@@ -93,10 +93,19 @@
 ├── ponwrt-required-packages.txt           # 关键包清单 (校验用)
 ├── cudy-tr3000-extra.config / -diy-part2.sh
 ├── cudy-tr3000-required-packages.txt
-├── cudy-tr3000.last-built-ref             # 已编译的上游版本 (自动回写)
-├── flash-guides/                          # 刷机指南
-└── xg-backup/                             # XG 设备原厂分区备份 (mtd0-16, 含 bosa/ri)
+└── cudy-tr3000.last-built-ref             # 已编译的上游版本 (自动回写)
 ```
+
+## 分支
+
+| 分支 | 内容 | 体积 |
+|---|---|---|
+| `main` | 云编译配置、workflow、产物校验脚本（就是这里） | 几十 KB |
+| [`flash-guides`](https://github.com/Kikoch/Openwrt-Actions/tree/flash-guides) | 刷机 / 救砖手册（3 个 md） | 极小 |
+| [`xg-backup`](https://github.com/Kikoch/Openwrt-Actions/tree/xg-backup) | Nokia XG 系列原厂分区备份（mtd0-16，含 `bosa`/`ri`） | 643 MB |
+
+两个内容分支都是**孤立分支**（无父提交、与 main 无历史关联），
+单独 clone / 下载不会把 643 MB 的二进制一起拉下来。
 
 ## 使用方法
 
@@ -107,10 +116,12 @@
 
 ## 刷机指南
 
-见 [flash-guides/](flash-guides/)：
+刷机 / 救砖手册在 **[`flash-guides` 分支](https://github.com/Kikoch/Openwrt-Actions/tree/flash-guides)**：
 
-- [Nokia XG-040G-MD (UBI)](flash-guides/xg-040g-md.md) — 网页 U-Boot 救砖、首次迁移串口步骤、`bosa`/`ri` 备份警示（参考 [Loong1996 恢复指南](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)）
-- [Cudy TR3000](flash-guides/cudy-tr3000.md) — 三种 profile 与设备状态对应表、原厂→OpenWrt 迁移、救砖
+- [Nokia XG-040G-MD (UBI)](https://github.com/Kikoch/Openwrt-Actions/blob/flash-guides/flash-guides/xg-040g-md.md) — 网页 U-Boot 救砖、首次迁移串口步骤、`bosa`/`ri` 备份警示（参考 [Loong1996 恢复指南](https://loong1996.github.io/ImmortalWrt-Airoha/recovery-guide.html)）
+- [Cudy TR3000](https://github.com/Kikoch/Openwrt-Actions/blob/flash-guides/flash-guides/cudy-tr3000.md) — 三种 profile 与设备状态对应表、原厂→OpenWrt 迁移、救砖
+
+原厂分区备份在 **[`xg-backup` 分支](https://github.com/Kikoch/Openwrt-Actions/tree/xg-backup)**（643 MB，含 XG-040G-MD / 1G 版 / XG-140G-MD 的 mtd0-16）。
 
 **XG-040G-MD**: 刷机前备份 `bosa`、`ri` 两个 UBI 卷（光口校准与身份数据）。
 刷机前跑 `sysupgrade -T` 检查，失败不要强制升级。
@@ -120,8 +131,8 @@
 PonWrt 是用于研究和开发的开源光猫固件项目。
 
 刷写固件或修改 PON 相关配置存在风险，可能导致设备无法启动、配置或设备数据丢失、
-PON 无法注册等问题。操作前请务必备份原厂固件及设备相关数据（`xg-backup/` 是本仓库
-自带的分区备份示例，不是你的设备数据）。
+PON 无法注册等问题。操作前请务必备份原厂固件及设备相关数据（`xg-backup` 分支是
+本仓库自带的分区备份示例，不是你的设备数据）。
 
 使用者应自行确保操作符合当地法律法规及运营商相关规定。请勿将本项目用于未经授权的
 网络接入、冒用或复制他人设备身份，或干扰运营商网络正常运行。
