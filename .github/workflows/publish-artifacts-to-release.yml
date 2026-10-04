@@ -1,0 +1,132 @@
+#=================================================
+# 把「已经编译完成」的 run 的产物发布成 Release
+#
+# 为什么需要它:
+#   两条编译线的 Create release 步骤都只在手动 dispatch 且填
+#   release=yes 时才跑, push 触发的构建只上传 Artifact 不发 Release。
+#   artifact 默认 90 天过期, 且要登录才能下载; Release 是长期可直链的。
+#   这个工作流把已有 artifact 直接转成 Release, 不需要重新编译。
+#
+# 用法:
+#   - 手动 Run workflow: 填 run_id(必填, workflow run 的 id) 和 tag
+#   - 或 push 本文件: 用下面 env 里的默认值(发布 DEFAULT_RUN_ID)
+#
+# 为什么用 gh 而不是软 action:
+#   gh 预装在 GitHub runner 上, 配 GH_TOKEN 就能下载本仓库任意 run 的
+#   artifact, 不需要额外的三方 action。
+#=================================================
+
+name: Publish artifacts to Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "要发布的 workflow run id"
+        required: true
+        default: "37162384732"
+      tag:
+        description: "Release tag"
+        required: true
+        default: "PonWrt_nokia_xg-040g-md-ubi_202610041135"
+      title:
+        description: "Release 标题"
+        required: false
+        default: ""
+  push:
+    paths:
+      - ".github/workflows/publish-artifacts-to-release.yml"
+
+# push 触发时没有 inputs, 用这两个默认值
+env:
+  DEFAULT_RUN_ID: "37162384732"
+  DEFAULT_TAG: "PonWrt_nokia_xg-040g-md-ubi_202610041135"
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  publish:
+    name: Download artifacts & create Release
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_ID: ${{ github.event.inputs.run_id || '37162384732' }}
+      TAG: ${{ github.event.inputs.tag || 'PonWrt_nokia_xg-040g-md-ubi_202610041135' }}
+      TITLE_IN: ${{ github.event.inputs.title }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download artifacts from run
+        id: dl
+        run: |
+          set -e
+          RUN_ID="${RUN_ID:-$DEFAULT_RUN_ID}"
+          echo "目标 run: $RUN_ID"
+          rm -rf out && mkdir -p out
+          if ! gh run download "$RUN_ID" --repo "${{ github.repository }}" -D out; then
+            echo "::error::下载 run $RUN_ID 的 artifact 失败(可能已过期或无产物)"
+            exit 1
+          fi
+          echo "=== 下载到的文件 ==="
+          find out -type f -printf '%10s  %p\n' | sort -k2
+          echo "文件数: $(find out -type f | wc -l)"
+          if [ "$(find out -type f | wc -l)" -eq 0 ]; then
+            echo "::error::run $RUN_ID 没有任何 artifact, 不创建 Release"
+            exit 1
+          fi
+
+      - name: Create Release
+        run: |
+          set -e
+          TAG="${TAG:-$DEFAULT_TAG}"
+          cd out
+          # artifact 会被放进以 artifact 名命名的子目录, 全部平铺上传
+          mapfile -t FILES < <(find . -type f | sort)
+          echo "待上传 ${#FILES[@]} 个文件:"
+          printf '  %s\n' "${FILES[@]}"
+
+          TITLE="${TITLE_IN:-PonWrt 固件 ${TAG}}"
+
+          cat > /tmp/notes.md <<EOF
+          ## 固件下载
+
+          | 文件 | 用途 |
+          |---|---|
+          | \`*-squashfs-sysupgrade.itb\` | 常规升级(sysupgrade) |
+          | \`*-initramfs-recovery.itb\` | 救砖 / 试跑(只进内存, 不写闪存) |
+          | \`build.config\` | 实际生效的完整配置 |
+          | \`build-info.txt\` | 源码 commit / 各 feed commit / 镜像清单 |
+          | \`SHA256SUMS\` | 镜像校验和 |
+          | \`*.manifest\` | 打进固件的软件包清单 |
+
+          ## 校验
+
+          已通过产物层校验(\`scripts/verify-firmware.sh\`):
+          profile 与板名匹配、镜像文件名含目标 profile、supported_devices 含
+          \`nokia,xg-040g-md-ubi\`、关键包齐全(PON 全栈 / EN8811H 2.5G PHY / NPU 固件 / zram)。
+
+          ## 刷机
+
+          步骤见 [flash-guides 分支](https://github.com/Kikoch/Openwrt-Actions/blob/flash-guides/flash-guides/xg-040g-md.md)。
+          **务必先备份自己的 \`bosa\`/\`ri\`** —— 逐机唯一, 丢了不可重建,
+          不要用别人的备份覆盖(原厂备份见 \`xg-backup\` 分支)。
+
+          ## 来源
+
+          - 构建 run: https://github.com/${{ github.repository }}/actions/runs/${RUN_ID:-$DEFAULT_RUN_ID}
+          - 源码: [pbs05/ponwrt](https://github.com/pbs05/ponwrt), commit 见产物内 \`build-info.txt\`
+          - feeds: 固定到与源码同期的提交
+          EOF
+          # 去掉每行前面的缩进(heredoc 为了对齐加了空格)
+          sed -i 's/^          //' /tmp/notes.md
+
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "$TITLE" \
+            --notes-file /tmp/notes.md \
+            "${FILES[@]}"
+
+          echo "Release 已创建: https://github.com/${{ github.repository }}/releases/tag/$TAG"
