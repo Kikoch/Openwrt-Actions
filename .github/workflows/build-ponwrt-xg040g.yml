@@ -185,8 +185,32 @@ jobs:
       run: |
         cd openwrt
         echo "$(nproc) thread compile"
-        # 多级回退; 全部失败必须让步骤报错, 否则会被当成成功继续走上传
-        make -j$(nproc) || make -j1 || make -j1 V=s || exit 1
+        # 多级回退; 全部失败必须让步骤报错, 否则会被当成成功继续走上传。
+        # 输出同时落盘: 编译日志动辄上百 MB(V=s 更夸张), 失败时不可能从网页尾部
+        # 一点点翻 —— 统一从磁盘日志里抽摘要, 做成 ::error:: 注解。
+        LOG=/tmp/openwrt-build.log
+        : > "$LOG"
+        if make -j$(nproc) 2>&1 | tee "$LOG"; then
+          :
+        elif make -j1 2>&1 | tee -a "$LOG"; then
+          :
+        elif make -j1 V=s 2>&1 | tee -a "$LOG"; then
+          :
+        else
+          echo "===== 编译失败: 摘要 ====="
+          # OpenWrt 的失败行形如 "    ERROR: package/feeds/packages/yq failed to build."
+          grep -E '^\s*ERROR: package/.* failed to build' "$LOG" | sort -u | while IFS= read -r line; do
+            echo "::error::${line#*ERROR: }"
+          done
+          # 再给几条上下文: 真正的报错原因通常在失败行前面几十行
+          echo "===== 失败包附近的报错 (去重后至多 30 行) ====="
+          grep -nE '^\s*ERROR: package/.* failed to build' "$LOG" | tail -1 | cut -d: -f1 | {
+            IFS= read -r ln && awk -v ln="$ln" 'NR>=ln-60 && NR<=ln' "$LOG"
+          } | grep -E 'Error [0-9]+|No such|No required|no required|failed|cannot find|Permission denied|go get ' | sort -u | head -30
+          echo "===== 日志最后 150 行 ====="
+          tail -150 "$LOG"
+          exit 1
+        fi
         # DEVICE_NAME 必须是单行。多行写进 $GITHUB_ENV 会被 runner 拒绝:
         #   "Invalid format '<第二行>'" + "Unable to process file command 'env'"
         # 并且会直接把整个编译步骤判成失败 (run #15 就是这么挂的,
