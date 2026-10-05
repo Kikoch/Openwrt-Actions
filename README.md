@@ -47,6 +47,12 @@
 ## 产物层校验（本仓库的关键机制）
 
 `scripts/verify-firmware.sh` 在编译后、上传前执行。校验不过 → 不上传 artifact、不发 Release。
+两条线各自通过专属入口调用它：`scripts/verify-ponwrt.sh` / `scripts/verify-tr3000.sh`。
+
+> **为什么要有两个入口**：GitHub 的 `on.push.paths` 是 **OR 语义**，commit 里命中任意一个
+> 文件就触发。共用实现一旦直接写进两条线的 paths，改一次校验脚本就会把两条线同时拉起来
+> （实测 `63e80ff`、`dba09d9` 两次都是同秒双起，TR3000 单次 3.5 小时白跑）。
+> 现在 `verify-firmware.sh` 不进任何 paths，只由两个入口文件转发调用。
 
 | 校验项 | 挡住的问题 |
 |--------|-----------|
@@ -89,7 +95,9 @@
 │   ├── build-ponwrt-xg040g.yml            # 线 1: PonWrt XG-040G-MD
 │   └── build-immortalwrt-cudy-tr3000.yml  # 线 2: Cudy TR3000 (自动增量)
 ├── scripts/
-│   └── verify-firmware.sh                 # 产物层校验 + 归档 (两条线共用)
+│   ├── verify-firmware.sh                 # 产物层校验 + 归档 (共用实现, 不进任何 paths)
+│   ├── verify-ponwrt.sh                   # 线 1 入口 (进 build-ponwrt paths)
+│   └── verify-tr3000.sh                   # 线 2 入口 (进 build-tr3000 paths)
 ├── ponwrt-extra.config / -diy-part1.sh / -diy-part2.sh
 ├── ponwrt-feeds.conf                      # feeds 定版
 ├── ponwrt-required-packages.txt           # 关键包清单 (校验用)

@@ -10,7 +10,10 @@
 name: Build PonWrt XG-040G-MD
 
 on:
+  # 必须带 types: 裸 repository_dispatch 会被任意 event_type 命中,
+  # 而 TR3000 那条线也这么写 -> 一次 dispatch 会同时把两条线拉起来。
   repository_dispatch:
+    types: [build-ponwrt]
   workflow_dispatch:
     inputs:
       source_ref:
@@ -47,7 +50,10 @@ on:
       - "ponwrt-diy-part2.sh"
       - "ponwrt-feeds.conf"
       - "ponwrt-required-packages.txt"
-      - "scripts/verify-firmware.sh"
+      # 用本线专属入口, 不要写共用的 scripts/verify-firmware.sh:
+      # paths 是 OR 语义, 共用文件会让改一次校验把 TR3000 线也拉起来
+      # (它单次 3.5 小时)。
+      - "scripts/verify-ponwrt.sh"
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
@@ -240,7 +246,7 @@ jobs:
         FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
-      run: bash scripts/verify-firmware.sh
+      run: bash scripts/verify-ponwrt.sh
 
     - name: Check space usage
       if: (!cancelled())

@@ -15,7 +15,10 @@
 name: Build ImmortalWrt Cudy TR3000
 
 on:
+  # 必须带 types: 裸 repository_dispatch 会被任意 event_type 命中,
+  # 而 PonWrt 那条线也这么写 -> 一次 dispatch 会同时把两条线拉起来。
   repository_dispatch:
+    types: [build-tr3000]
   workflow_dispatch:
     inputs:
       release:
@@ -43,7 +46,9 @@ on:
       - "cudy-tr3000-extra.config"
       - "cudy-tr3000-diy-part2.sh"
       - "cudy-tr3000-required-packages.txt"
-      - "scripts/verify-firmware.sh"
+      # 用本线专属入口, 不要写共用的 scripts/verify-firmware.sh:
+      # paths 是 OR 语义, 共用文件会让改一次校验把 PonWrt 线也拉起来。
+      - "scripts/verify-tr3000.sh"
       # 构建配方自身改动也要真编一次:
       # 若只改 workflow 文件而 paths 不匹配, GitHub 会静默不触发,
       # 配方写错了也没人发现 (2026-10-03 的重复 permissions 就是这么埋进去的)
@@ -213,7 +218,7 @@ jobs:
         # 期望的 profile 本身不能被列进 FORBID
         FORBID="$(echo "$FORBID_PROFILES" | tr ' ' '\n' | grep -vx "$EXPECT_PROFILE" | tr '\n' ' ')"
         export FORBID_PROFILES="$FORBID"
-        bash scripts/verify-firmware.sh
+        bash scripts/verify-tr3000.sh
 
     - name: Check space usage
       if: (!cancelled())
@@ -299,9 +304,17 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Update last-built ref (记录已编译的上游版本)
-      if: success() && github.event_name == 'schedule'
+      # 原来限定 github.event_name == 'schedule', 导致 push 触发的构建
+      # (编的就是上游最新 HEAD) 不记账 -> last-built-ref 冻结在旧值 ->
+      # 次日 schedule 判定"上游有更新"又把同一份源码重编一遍。
+      # 任何成功构建都要记账。
+      # 值必须用 env.SOURCE_SHA (实际 clone 下来编译的 commit), 不能用
+      # needs.check.outputs.sha —— 那是 build 之前 ls-remote 探测到的,
+      # 编译跑 3.5 小时期间上游可能又前进了。
+      if: success()
       run: |
-        REF="${{ needs.check.outputs.branch }}@${{ needs.check.outputs.sha }}"
+        REF="${{ needs.check.outputs.branch }}@${{ env.SOURCE_SHA }}"
+        [ -n "${{ env.SOURCE_SHA }}" ] || { echo "FATAL: SOURCE_SHA 为空, 拒绝写入脏记录"; exit 1; }
         echo "$REF" > "$LAST_REF_FILE"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
