@@ -93,4 +93,59 @@ grep -nF "$NEW_LINE" "$P158"
 echo "=== LAN 口 QoS 通道修复已注入: DSA 目标端口全部走通道 0 ==="
 echo "=== (lan2/lan3 由通道 2/3 改到通道 0; lan1/lan4 本来就是通道 0, 不受影响) ==="
 
+# ---------------------------------------------------------------
+# lan1 (2.5G) 冷启动不开链修复 —— EN8811H 复位时序
+#
+# 现象: 刷 PonWrt 后 lan1(2.5G) 冷启动起不来, 必须 `ip link set lan1 down/up`
+#       复位一次才通; 拔插网线救不回来。刷 ImmortalWrt 没这个问题。
+#
+# 根因 (离线固件解包 + 源码层按 ref 直取, 双证):
+#   target/linux/airoha/dts/an7581-nokia_xg-040g-md-common.dtsi
+#     en8811: ethernet-phy@f  (compatible = "ethernet-phy-id03a2.a411")
+#       PonWrt      @5651948f9d : reset-assert-us = <1000000> (1s)
+#                                 reset-deassert-us = <100000> (100ms)   <-- pin 的 ref 里就是这个
+#       ImmortalWrt @f44d1535b4 : reset-assert-us = <10000>   (10ms)
+#                                 reset-deassert-us = <20000>   (20ms)
+#   两个文件都按 ref 直取核对过 (HTTP 200), 同一节点只差这两个值。
+#
+#   机制: airoha_eth 是 builtin, 内核初始化阶段就把 MAC+PCS bring-up 完了;
+#   PHY 复位由 phylib 在 en8811h probe 之后执行, 晚于 MAC 侧。
+#   2500BASE-X 是 MAC<->PHY 带内自协商, SoC 侧 PCS 起来时对端还被摁在复位线上
+#   -> rxlock 拿不到训练序列 -> 链路"假 Up"(ethtool 全绿, 但 RX 几乎为 0)。
+#   down/up 会重跑 MAC+PCS+DMA ring, 所以能救; 拔插只 flap PHY 层, 救不回来。
+#
+# 修法: 改回主线一致的 10ms/20ms。DTS 是纯文本, 不需要碰补丁机制。
+#       只改内容不改行数, 注释也一起改。
+# ---------------------------------------------------------------
+DTS_XG=target/linux/airoha/dts/an7581-nokia_xg-040g-md-common.dtsi
+if [ ! -f "$DTS_XG" ]; then
+  echo "FATAL: 找不到 $DTS_XG, lan1 复位时序修复无法应用"
+  exit 1
+fi
+
+for pair in \
+  'reset-assert-us = <1000000>;|reset-assert-us = <10000>;' \
+  'reset-deassert-us = <100000>;|reset-deassert-us = <20000>;'
+do
+  O=$(printf '%s' "$pair" | cut -d'|' -f1)
+  N=$(printf '%s' "$pair" | cut -d'|' -f2)
+  C=$(grep -cF "$O" "$DTS_XG" 2>/dev/null || true)
+  if [ "$C" != "1" ]; then
+    echo "FATAL: $DTS_XG 中 '$O' 出现 $C 次 (期望恰好 1 次), 拒绝盲改"
+    grep -nF "$O" "$DTS_XG" || true
+    exit 1
+  fi
+  sed -i.bak "s|$O|$N|" "$DTS_XG"
+  if grep -qF "$O" "$DTS_XG"; then
+    echo "FATAL: sed 替换失败, 旧值还在: $O"
+    exit 1
+  fi
+done
+
+# 注释跟着改 (同样只改内容不改行数)
+sed -i 's|Hold reset for 1 second and wait 100 ms before probing EN8811H\.|Hold reset for 10 ms and wait 20 ms before probing EN8811H.|' "$DTS_XG"
+
+echo "=== EN8811H 复位时序已改回主线值 (1s/100ms -> 10ms/20ms) ==="
+grep -nE "reset-(assert|deassert)-us|Hold reset for" "$DTS_XG"
+
 exit 0

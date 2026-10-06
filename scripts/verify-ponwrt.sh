@@ -45,4 +45,32 @@ else
   echo "WARN: 未找到解压后的 airoha_ppe.c, 跳过源码层校验"
 fi
 
+# ---------------------------------------------------------------
+# 源码层断言 2: 确认 EN8811H 复位时序修复 (lan1 2.5G 冷启动不开链) 也落到位了。
+# 同样只在找到文件时断言, 找不到只警告。
+# ---------------------------------------------------------------
+DTS_XG_C=$(find openwrt/build_dir -name an7581-nokia_xg-040g-md-common.dtsi 2>/dev/null | head -1)
+BAD_ASSERT='reset-assert-us = <1000000>;'
+GOOD_ASSERT='reset-assert-us = <10000>;'
+BAD_DEASSERT='reset-deassert-us = <100000>;'
+GOOD_DEASSERT='reset-deassert-us = <20000>;'
+
+if [ -n "$DTS_XG_C" ]; then
+  echo "=== 源码层校验: $DTS_XG_C ==="
+  if grep -qF "$BAD_ASSERT" "$DTS_XG_C" || grep -qF "$BAD_DEASSERT" "$DTS_XG_C"; then
+    echo "::error::EN8811H 复位时序修复未生效: dts 仍是 1s/100ms (lan1 冷启动会不开链)"
+    grep -nE 'reset-(assert|deassert)-us' "$DTS_XG_C" || true
+    exit 1
+  fi
+  if grep -qF "$GOOD_ASSERT" "$DTS_XG_C" && grep -qF "$GOOD_DEASSERT" "$DTS_XG_C"; then
+    echo "=== EN8811H 复位时序修复已确认落到内核 dts ==="
+    grep -nE 'reset-(assert|deassert)-us' "$DTS_XG_C"
+  else
+    echo "WARN: EN8811H 复位时序无法确认 (两条特征值都没找到)"
+    grep -nE 'reset-(assert|deassert)-us' "$DTS_XG_C" || true
+  fi
+else
+  echo "WARN: 未找到解压后的 an7581-nokia_xg-040g-md-common.dtsi, 跳过该断言"
+fi
+
 exec bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/verify-firmware.sh" "$@"
