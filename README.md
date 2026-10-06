@@ -80,6 +80,46 @@
 `cudy-tr3000-required-packages.txt`。只放"缺了就废"的包，别塞可选包，
 否则校验会变成噪音。
 
+## 编译配置：哪些包关不掉（踩过的坑）
+
+`ponwrt-extra.config` 里写 `# CONFIG_PACKAGE_x is not set` **只对"没人 select 的符号"有效**。
+`DEPENDS:=+foo` 会被 `scripts/package-metadata.pl` 的 `mconf_depends()` 转成
+`select PACKAGE_foo`，而 **select 优先级高于用户写的 `is not set`** —— 写多少遍都会被顶回来。
+
+已确认**关不掉**的（别再试着关，也别放进 `FORBID_PKGS`，否则配置阶段必然判死）：
+
+| 包 | 为什么关不掉 |
+|----|-------------|
+| `shellsync` / `kmod-macvlan` / `kmod-mppe` | `ppp` 的硬依赖（`ppp/Makefile:56`、`shellsync/Makefile:12`），而 `ppp` 在 `include/target.mk` 的 `DEFAULT_PACKAGES.router` 里 → 经 `target-metadata.pl:262` 的 `select DEFAULT_ppp` 顶成 `=y` |
+| `kmod-i2c-core` | 一度判「关不掉」：`hwmon.mk:12` 的 `hwmon-core DEPENDS:=+kmod-i2c-core`，而 `hwmon-core` 被三路 select —— `mt76/Makefile:238`（mt7915e）、`netdevices.mk:566`（phy-realtek）、`netdevices.mk:297`（phy-maxlinear），三者基线都是 `=m`。**但本设备没有 WiFi、外接 PHY 只有 en8811（DTS 证实），把三个上游关掉后它就关得掉了**（见下） |
+
+核实方法（别靠推理）：在源码树里 grep `DEPENDS.*<pkg>`，再逐个确认这些上游包
+在 `configs/an7581.config` 里是不是 `=y`/`=m`。稀疏克隆只要 36 MB，比反复猜快得多。
+
+### 顺序很重要：先关上游，再关下游
+
+`select` 是单向的 —— 上游还在，下游写 `is not set` 一律无效。本仓库的实际例子：
+
+```text
+kmod-mt7915e ─┐
+kmod-phy-realtek ─┼─ select ─→ kmod-hwmon-core ─ select ─→ kmod-i2c-core
+kmod-phy-maxlinear ─┘
+```
+
+所以 `ponwrt-extra.config` 里的顺序是 **WiFi 全家桶 → 冗余 PHY → hwmon-core → i2c-core**，
+反过来写等于白写。
+
+**`seed` 里有 ≠ 设备需要。** XG-040G-MD 没有 WiFi（DTS 无 `pcie`/`wlan`/`wifi` 节点，
+不 include `an7581-npu-wlan.dtsi`），但官方 `an7581.config` 要兼顾 q1000k / evb /
+zn504xg-d 等带 WiFi 的同 SoC 板子，于是整套 `mt76` + `mac80211` + `wpad-openssl`
+都是 `=m` 跟着编。同理 `kmod-phy-realtek` / `kmod-phy-maxlinear` / `rtl826x-firmware`
+—— 本设备外接 PHY 只有 `en8811`（`ethernet-phy-id03a2.a411`），其余口是 SoC 内置
+`gsw_phy2/3/4`（`phy-mode = "internal"`）。**判断"要不要"看设备 DTS 和
+`DEVICE_PACKAGES`，不看 seed。**
+
+另注意：**`=m` 不等于不编** —— `m` 照样编译，只是不进镜像。所以 `i2c-tools` 和
+`libi2c` 必须一起关（只关前者，`libi2c` 会退回 `=m` 继续编）。
+
 ## 可复现性
 
 - **源码定版**: 每条线的 workflow `env.REPO_REF` 固定 commit，手动可覆盖
