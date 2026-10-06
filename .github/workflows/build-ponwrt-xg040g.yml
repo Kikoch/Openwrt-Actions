@@ -198,11 +198,32 @@ jobs:
       run: cd openwrt && ./scripts/feeds install -a
 
     - name: Load configuration (官方 kconfig 合并 + 附加包)
+      # 显式 shell: bash —— 既拿回 pipefail (默认的 `bash -e {0}` 没有, 失败会被吞掉),
+      # 也才能在下面用 `脚本 | tee` 判退出码。
+      #
+      # 失败时把脚本输出抬成 ::error:: 注解, 这是**故意的**:
+      #   GitHub 的完整 job 日志要 admin 权限 (匿名 API 403, 网页也要求登录),
+      #   而**注解是公开可读的** (匿名读 check-run 的 /annotations 就能拿到)。
+      #   没有注解, 配置阶段的失败就只能靠人肉贴日志, 排障效率差一个数量级。
+      #   注解里换行必须编码成 %0A, % 本身要先转义成 %25。
+      shell: bash
       run: |
-        [ -e files ] && mv files openwrt/files
+        if [ -e files ]; then mv files openwrt/files; fi
         chmod +x $DIY_P2_SH
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        LOG=/tmp/diy-part2.log
+        if "$GITHUB_WORKSPACE/$DIY_P2_SH" 2>&1 | tee "$LOG"; then
+          exit 0
+        fi
+        esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
+        NL=$'\n'
+        FATALS="$(grep -aE '^FATAL' "$LOG" | sort -u || true)"
+        [ -n "$FATALS" ] && echo "::error::$(esc "配置阶段失败原因:${NL}${FATALS}")"
+        # 无论哪条断言炸, 都把相关符号的**真实值**一并报出来 —— 免得再来一轮
+        EV="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL' .config | sort -u || true)"
+        echo "::error::$(esc "defconfig 之后的相关符号实况:${NL}${EV}")"
+        echo "::error::$(esc "脚本末尾 30 行:${NL}$(tail -30 "$LOG")")"
+        exit 1
 
     - name: Download package
       id: package
