@@ -9,6 +9,20 @@
 
 set -e
 
+# ---------------------------------------------------------------
+# 诊断工具: 失败原因必须发成 GitHub 注解
+#
+# 为什么不能只 echo: GitHub 公开仓库的**完整 job 日志需要 admin 权限**
+#   (匿名读 API 是 403 "Must have admin rights", 网页版也要求登录),
+#   而 **check-run 的 annotations 是匿名可读的**。
+#   配置阶段的失败只 echo 的话, 排障就只能靠人肉贴日志 —— 差一个数量级。
+# 注解里换行必须编码成 %0A, % 本身要先转义成 %25 (GitHub workflow command 规则)。
+# 注意: 发 ::error:: 不会改变步骤退出码, 只挂注解; 失败仍靠下面的 exit 1。
+# ---------------------------------------------------------------
+esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
+NL=$'\n'
+err() { echo "::error::$(esc "$1")"; printf '%s\n' "$1"; }
+
 # 1. 官方合并方式 (与 .github/workflows/release.yml 一致)
 ./scripts/kconfig.pl + \
   configs/an7581.config \
@@ -43,12 +57,18 @@ EOF
 # 4. 展开为完整配置
 make defconfig
 
+# 诊断 (2026-10-06): 无论后面哪条断言炸, 先把相关符号的**真实值**发成注解。
+# 这样一次运行就能定位, 不用"改一点推一次"地猜。
+SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL' .config | sort -u || true)"
+echo "::warning::$(esc "defconfig 之后的相关符号实况:${NL}${SYMS}")"
+
 # 早失败: MULTI_PROFILE 若还开着, 后面会白编两个多小时, 而且编译步骤
 # 写 $GITHUB_ENV 时会因为多行直接被打失败。这里几十秒内就拦住。
 if grep -q '^CONFIG_TARGET_MULTI_PROFILE=y' .config; then
   echo "FATAL: CONFIG_TARGET_MULTI_PROFILE 仍为 y, 会编译全部设备"
   echo "       (产物混杂 + 编译步骤 DEVICE_NAME 多行导致 runner 报 Invalid format)"
   grep '^CONFIG_TARGET.*DEVICE.*=y' .config | head -20 || true
+  err "FATAL: CONFIG_TARGET_MULTI_PROFILE 仍为 y (会编译全部设备)"
   exit 1
 fi
 echo "=== MULTI_PROFILE 已关闭, 单设备构建 ==="
@@ -69,6 +89,7 @@ for pkg in kmod-airoha-en7572 kmod-phy-airoha-en8811h kmod-airoha-xpon kmod-airo
 done
 if [ -n "$MISSING" ]; then
   echo "FATAL: 关键硬件驱动未进入配置:$MISSING"
+  err "FATAL: 关键硬件驱动未进入配置:$MISSING"
   exit 1
 fi
 echo "=== 关键驱动校验通过 ==="
@@ -83,6 +104,7 @@ for pkg in luci-app-openclash luci-app-adblock-fast ; do
     echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
     echo "       luci pin 落在 ed0441b1(2026-10-02 merge) 之前的话, openclash 等"
     echo "       第三方 LuCI 应用是不存在的; 另外确认 scripts/feeds install -a 跑过"
+    err "FATAL: ${pkg} 在 defconfig 之后不是 =y (feeds 里没这个包?)"
     exit 1
   fi
 done
@@ -102,6 +124,7 @@ if [ -n "$HIT" ]; then
   echo "FATAL: 已砍掉的包又冒出来了:$HIT"
   echo "       多半是别的包 DEPENDS/select 它们; =m 也算(照样编译, 只是不进镜像)。"
   grep -E "^CONFIG_PACKAGE_(shellsync|kmod-macvlan|luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-mppe|kmod-ovpn-backports)=" .config || true
+  err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E "^CONFIG_PACKAGE_(shellsync|kmod-macvlan|luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-mppe|kmod-ovpn-backports)=" .config || true)"
   exit 1
 fi
 echo "=== 已砍包确认全部关闭: shellsync / macvlan / iptv / mppe / ovpn ==="
@@ -111,6 +134,7 @@ if grep -qE "^CONFIG_KERNEL_DEBUG_INFO(_REDUCED)?=y" .config; then
   echo "FATAL: CONFIG_KERNEL_DEBUG_INFO 仍是 y —— 内核与全部 kmod 会全带调试信息"
   echo "       extra.config 里的反向覆盖没生效? 确认没有别的文件在它后面又打开了。"
   grep -nE "^CONFIG_KERNEL_DEBUG_INFO" .config || true
+  err "FATAL: CONFIG_KERNEL_DEBUG_INFO 仍是 y${NL}$(grep -nE "^CONFIG_KERNEL_DEBUG_INFO" .config || true)"
   exit 1
 fi
 echo "=== 内核 DEBUG_INFO 已关闭 (DEBUG_FS 保留) ==="
@@ -118,6 +142,7 @@ echo "=== 内核 DEBUG_INFO 已关闭 (DEBUG_FS 保留) ==="
 # 强校验: ccache 真的开着 (否则 workflow 的 Cache ccache 步骤白存 1.5 GB)
 if ! grep -q "^CONFIG_CCACHE=y" .config; then
   echo "FATAL: CONFIG_CCACHE 不是 y —— ccache 缓存白存, 编译也不会变快"
+  err "FATAL: CONFIG_CCACHE 不是 y${NL}$(grep -nE "^CONFIG_(CCACHE|DEVEL)" .config || true)"
   exit 1
 fi
 echo "=== ccache 已启用 (CCACHE_DIR 由 workflow 指定并缓存) ==="
@@ -129,6 +154,7 @@ UPNP_ON="$(grep -E '^CONFIG_PACKAGE_(luci-app-upnp|luci-i18n-upnp-zh-cn|miniupnp
 if [ -n "$UPNP_ON" ]; then
   echo "FATAL: UPnP 组件仍然开着 (release.config 的 base 值没覆盖掉):"
   printf '%s\n' "$UPNP_ON"
+  err "FATAL: UPnP 组件仍然开着:${NL}${UPNP_ON}"
   exit 1
 fi
 echo "=== UPnP 已确认关闭 ==="
