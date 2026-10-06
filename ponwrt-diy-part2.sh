@@ -59,7 +59,9 @@ make defconfig
 
 # 诊断 (2026-10-06): 无论后面哪条断言炸, 先把相关符号的**真实值**发成注解。
 # 这样一次运行就能定位, 不用"改一点推一次"地猜。
-SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG' .config | sort -u || true)"
+# 注意: 这里**只观测不断言**。i2c 那两项关掉只能省以秒计的时间, 不值得拿一次
+# 1.5~3 小时的构建去赌一条硬断言 (ppp 那三个包就是教训) —— 关没关掉看注解即可。
+SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|libi2c|i2c-tools|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG' .config | sort -u || true)"
 echo "::warning::$(esc "defconfig 之后的相关符号实况:${NL}${SYMS}")"
 
 # 早失败: MULTI_PROFILE 若还开着, 后面会白编两个多小时, 而且编译步骤
