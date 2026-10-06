@@ -4,6 +4,8 @@
 #   2) 追加只编 Nokia XG-040G-MD (UBI) 的设备选择 (纯追加, 不做 sed 手术)
 #   3) 追加自定义附加包 (ponwrt-extra.config)
 #   4) make defconfig 展开
+#   5) 一组 defconfig 之后的硬校验 (关键驱动 / 指定包含 / 已砍包不许复活 /
+#      DEBUG_INFO / ccache) —— 全部在 40 秒内出结果, 不用白编 3.5 小时
 
 set -e
 
@@ -76,7 +78,7 @@ echo "=== 关键驱动校验通过 ==="
 #   —— 默默删掉那一行。编译照 green, 固件里就是没有。run #16 的 openclash
 #   就是这么失踪的 (固定的 luci/packages feed 里压根没这个包)。这里几十秒挡住,
 #   省得白编两小时再靠 manifest 反查。
-for pkg in luci-app-openclash luci-app-adblock-fast luci-app-iptv ; do
+for pkg in luci-app-openclash luci-app-adblock-fast ; do
   if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
     echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
     echo "       luci pin 落在 ed0441b1(2026-10-02 merge) 之前的话, openclash 等"
@@ -84,7 +86,41 @@ for pkg in luci-app-openclash luci-app-adblock-fast luci-app-iptv ; do
     exit 1
   fi
 done
-echo "=== 指定包含的包全部命中: openclash / adblock-fast / iptv ==="
+echo "=== 指定包含的包全部命中: openclash / adblock-fast ==="
+
+# 强校验: 明确砍掉的包不许复活 (2026-10-06 编译耗时优化)。
+# 这些都是"仅为对齐 18.1、实测未启用"的残留, 每个 kmod 都要走一遍内核模块编译。
+# 若被别的包 DEPENDS/select 拉回来, 这里 40 秒内拦住, 不用白编 3.5 小时。
+FORBID_PKG_LIST="shellsync kmod-macvlan luci-app-iptv luci-i18n-iptv-zh-cn kmod-mppe kmod-ovpn-backports"
+HIT=""
+for pkg in $FORBID_PKG_LIST; do
+  if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
+    HIT="$HIT $pkg"
+  fi
+done
+if [ -n "$HIT" ]; then
+  echo "FATAL: 已砍掉的包又冒出来了:$HIT"
+  echo "       多半是别的包 DEPENDS/select 它们; =m 也算(照样编译, 只是不进镜像)。"
+  grep -E "^CONFIG_PACKAGE_(shellsync|kmod-macvlan|luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-mppe|kmod-ovpn-backports)=" .config || true
+  exit 1
+fi
+echo "=== 已砍包确认全部关闭: shellsync / macvlan / iptv / mppe / ovpn ==="
+
+# 强校验: 内核与全部 kmod 不再产 DWARF 调试信息 (编译时间 + 磁盘)
+if grep -qE "^CONFIG_KERNEL_DEBUG_INFO(_REDUCED)?=y" .config; then
+  echo "FATAL: CONFIG_KERNEL_DEBUG_INFO 仍是 y —— 内核与全部 kmod 会全带调试信息"
+  echo "       extra.config 里的反向覆盖没生效? 确认没有别的文件在它后面又打开了。"
+  grep -nE "^CONFIG_KERNEL_DEBUG_INFO" .config || true
+  exit 1
+fi
+echo "=== 内核 DEBUG_INFO 已关闭 (DEBUG_FS 保留) ==="
+
+# 强校验: ccache 真的开着 (否则 workflow 的 Cache ccache 步骤白存 1.5 GB)
+if ! grep -q "^CONFIG_CCACHE=y" .config; then
+  echo "FATAL: CONFIG_CCACHE 不是 y —— ccache 缓存白存, 编译也不会变快"
+  exit 1
+fi
+echo "=== ccache 已启用 (CCACHE_DIR 由 workflow 指定并缓存) ==="
 
 # 强校验: UPnP 必须真的关掉。官方 configs/release.config 自带
 # CONFIG_PACKAGE_luci-app-upnp=y, 只在 ponwrt-extra.config 里删掉那一行没用,

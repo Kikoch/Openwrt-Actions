@@ -87,7 +87,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04
+    # 想换更大的 runner 不用改文件: 仓库 Settings → Variables → Actions 新建变量
+    # PONWRT_RUNNER, 值填你那边 larger runner 的 label。不建就是默认的 4 vCPU
+    # ubuntu-24.04 —— 单次编译约 3.5 小时(实测 198~230 分钟), 换 16 核大约 1 小时。
+    runs-on: ${{ vars.PONWRT_RUNNER || 'ubuntu-24.04' }}
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
@@ -95,9 +98,17 @@ jobs:
       uses: actions/checkout@v5
 
     - name: Free build space
+      # 标准 runner 只有 14 GB 盘, 而带 DEBUG_INFO 的完整构建很容易把盘压到底 ——
+      # 见底不是"报错", 是 I/O 抖动, 表现出来就是"莫名其妙变慢"。这里多腾几 GB,
+      # 并在前后各打一次 df, 事后能判断是不是磁盘的锅。
       run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        df -hT /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /usr/share/swift /opt/hostedtoolcache /usr/local/share/boost \
+                    /opt/az /usr/local/.ghcup
         sudo apt-get clean
+        sudo docker image prune -af >/dev/null 2>&1 || true
+        df -hT /
 
     - name: Initialization environment
       env:
@@ -132,14 +143,29 @@ jobs:
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Cache downloads (dl/)
-      # 缓存已下载的软件包源码，重复构建可省掉数 GB 重复下载
-      # key 含 feeds 与配置哈希，任一变更自动失效
+      # 缓存已下载的软件包源码，重复构建可省掉数 GB 重复下载。
+      # key 只用 feeds.conf: dl/ 里装的是源码 tarball, 内容只由 feeds 的 pin 决定,
+      # 跟 extra.config / diy-part2.sh 无关。以前把这两个也算进 key, 结果每改一次
+      # 包选择就换 key -> 全量重存几 GB, 还把别的缓存挤掉。
       uses: actions/cache@v4
       with:
         path: /workdir/openwrt/dl
-        key: ponwrt-dl-${{ hashFiles('ponwrt-feeds.conf', 'ponwrt-extra.config', 'ponwrt-diy-part2.sh') }}
+        key: ponwrt-dl-${{ hashFiles('ponwrt-feeds.conf') }}
         restore-keys: |
           ponwrt-dl-
+
+    - name: Cache ccache
+      # 配合 ponwrt-extra.config 里的 CONFIG_CCACHE=y。OpenWrt 的 CCACHE_DIR 默认落在
+      # $(TOPDIR)/.ccache = /workdir/openwrt/.ccache。
+      # 这是跨构建复用 C 编译结果的唯一手段 —— 只缓存 dl/ 的话, 工具链和几百个包
+      # 每次都要从零编, 3.5 小时里绝大部分就耗在这。首次要多编一个 tools/ccache 4.13.3。
+      # 注意 GitHub 缓存总配额 10 GB/仓库, 要和 dl/ (以及 TR3000 那条线) 一起算账。
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: ponwrt-ccache-${{ hashFiles('ponwrt-feeds.conf', 'ponwrt-extra.config', 'ponwrt-diy-part2.sh') }}
+        restore-keys: |
+          ponwrt-ccache-
 
     - name: Load custom feeds (pinned)
       run: |
@@ -188,49 +214,93 @@ jobs:
 
     - name: Compile the firmware
       id: compile
+      # 必须显式写 shell: bash —— Linux 上的默认 shell 是 `bash -e {0}`, 不含 pipefail,
+      # 于是 `make … | tee "$LOG"` 的退出码等于 tee 的（恒 0）, make 失败会被判成 success。
+      # run #23 就是这么"假成功"的: 编译 30.6 分钟死在内核补丁上, 步骤报 success,
+      # 一直到 verify 的源码断言才发现。写明 shell: bash 才会加 -o pipefail。
+      shell: bash
+      env:
+        # --- ccache（配合 ponwrt-extra.config 的 CONFIG_CCACHE=y）---
+        # rules.mk 自己会 export CCACHE_BASEDIR / CCACHE_NOCOMPRESS, 这里只补它没设的。
+        CCACHE_DIR: /workdir/openwrt/.ccache
+        CCACHE_MAXSIZE: 1500M
+        # ccache 默认 compiler_check=mtime: 每次重新编出来的工具链 mtime 都不一样 -> 全 miss。
+        # 按内容比对, 跨构建才有机会命中。
+        CCACHE_COMPILERCHECK: content
       run: |
         cd openwrt
-        echo "$(nproc) thread compile"
-        # 多级回退; 全部失败必须让步骤报错, 否则会被当成成功继续走上传。
-        # 输出同时落盘: 编译日志动辄上百 MB(V=s 更夸张), 失败时不可能从网页尾部
-        # 一点点翻 —— 统一从磁盘日志里抽摘要, 做成 ::error:: 注解。
+        JOBS=$(( $(nproc) + 1 ))
+        echo "$(nproc) vCPU -> make -j$JOBS"
         LOG=/tmp/openwrt-build.log
         : > "$LOG"
-        if make -j$(nproc) 2>&1 | tee "$LOG"; then
-          :
-        elif make -j1 2>&1 | tee -a "$LOG"; then
-          :
-        elif make -j1 V=s 2>&1 | tee -a "$LOG"; then
-          :
+        ts() { date -u '+%H:%M:%S'; }
+        df -hT / | tail -1
+
+        rc=0
+        echo "### [$(ts)] make -j$JOBS 开始"
+        if make -j"$JOBS" 2>&1 | tee "$LOG"; then
+          echo "### [$(ts)] make 一次通过"
         else
+          # 以前这里接着 `make -j1` 做全树串行兜底 —— 那等于把剩下的活儿全部单核串行化,
+          # 失败点稍微靠前一点, 30 分钟就能变成 3 小时。改成: 从日志抓出失败的包, 定点重编。
+          echo "### [$(ts)] make -j$JOBS 失败, 转入定点重编"
+          FAILED="$(grep -oE 'package/[^ ]+ failed to build' "$LOG" | sed 's/ failed to build//' | sort -u || true)"
+          if [ -z "$FAILED" ]; then
+            echo "### 日志里没抓到 'failed to build', 原样重试一次"
+            make -j"$JOBS" 2>&1 | tee -a "$LOG" || rc=$?
+          else
+            echo "### 失败包: $(printf '%s ' $FAILED)"
+            for p in $FAILED; do
+              echo "### [$(ts)] 定点重编 $p"
+              make "$p/compile" V=s -j1 2>&1 | tee -a "$LOG" \
+                || echo "### $p 定点重编未通过, 先跑完剩余目标再定论"
+            done
+            echo "### [$(ts)] 定点重编结束, 补完剩余目标"
+            make -j"$JOBS" 2>&1 | tee -a "$LOG" || rc=$?
+          fi
+        fi
+
+        if [ "$rc" -ne 0 ]; then
+          echo "### [$(ts)] 编译最终失败"
+          # 诊断代码是"尽力而为", 别让刚拿到的 pipefail 把诊断自己打断
+          set +e
           echo "===== 编译失败: 摘要 ====="
           # OpenWrt 的失败行形如 "    ERROR: package/feeds/packages/yq failed to build."
-          grep -E '^\s*ERROR: package/.* failed to build' "$LOG" | sort -u | while IFS= read -r line; do
+          grep -E '^[[:space:]]*ERROR: package/.* failed to build' "$LOG" | sort -u | while IFS= read -r line; do
             echo "::error::${line#*ERROR: }"
           done
           # 再给几条上下文: 真正的报错原因通常在失败行前面几十行
           echo "===== 失败包附近的报错 (去重后至多 30 行) ====="
-          grep -nE '^\s*ERROR: package/.* failed to build' "$LOG" | tail -1 | cut -d: -f1 | {
+          grep -nE '^[[:space:]]*ERROR: package/.* failed to build' "$LOG" | tail -1 | cut -d: -f1 | {
             IFS= read -r ln && awk -v ln="$ln" 'NR>=ln-60 && NR<=ln' "$LOG"
           } | grep -E 'Error [0-9]+|No such|No required|no required|failed|cannot find|Permission denied|go get ' | sort -u | head -30
           echo "===== 日志最后 150 行 ====="
           tail -150 "$LOG"
           exit 1
         fi
+        echo "### [$(ts)] 编译完成"
+        df -hT / | tail -1
+        echo "--- ccache 统计 (cache hit 低就说明这套没在起作用) ---"
+        ccache -s 2>/dev/null || true
         # DEVICE_NAME 必须是单行。多行写进 $GITHUB_ENV 会被 runner 拒绝:
         #   "Invalid format '<第二行>'" + "Unable to process file command 'env'"
         # 并且会直接把整个编译步骤判成失败 (run #15 就是这么挂的,
         # 后面 Verify / 上传 / Release 全被 skipped)。
-        # 优先取期望的 profile, 取不到再退回第一个, 保证永远单行。
-        DEVICE_LIST="$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' | sort -u)"
+        # 优先取期望的 profile, 取不到再退回第一个; 一个都没有时退回 EXPECT_PROFILE,
+        # 不要在这里 exit —— 已经编了 3.5 小时, 别因为取名失败把产物丢掉。
+        DEVICE_LIST="$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config 2>/dev/null | sed -r 's/.*DEVICE_(.*)=y/\1/' | sort -u || true)"
         DEVICE_OUT=""
         if printf '%s\n' "$DEVICE_LIST" | grep -qx '${{ env.EXPECT_PROFILE }}'; then
           DEVICE_OUT='${{ env.EXPECT_PROFILE }}'
         else
           DEVICE_OUT="$(printf '%s\n' "$DEVICE_LIST" | head -1)"
         fi
+        if [ -z "$DEVICE_OUT" ]; then
+          echo "::warning::.config 里没有 CONFIG_TARGET.*DEVICE.*=y, 退回 EXPECT_PROFILE"
+          DEVICE_OUT='${{ env.EXPECT_PROFILE }}'
+        fi
         echo "构建设备: $DEVICE_OUT (全部命中: $(printf '%s' "$DEVICE_LIST" | tr '\n' ' '))"
-        [ -n "$DEVICE_OUT" ] && echo "DEVICE_NAME=$DEVICE_OUT" >> $GITHUB_ENV
+        echo "DEVICE_NAME=$DEVICE_OUT" >> $GITHUB_ENV
         echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Verify firmware (产物层校验 + 归档)
@@ -242,8 +312,9 @@ jobs:
         EXPECT_BOARD: ${{ env.EXPECT_BOARD }}
         REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
         # 官方 configs/release.config 自带 luci-app-upnp, 已在 extra.config 里
-        # 反向覆盖; 这里在产物层再卡一道, 防止依赖链把它 select 回来
-        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables"
+        # 反向覆盖; 这里在产物层再卡一道, 防止依赖链把它 select 回来。
+        # 后半段是 2026-10-06 砍掉的包（实测未启用的残留, 每个 kmod 都要走一遍内核模块编译）。
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables shellsync kmod-macvlan luci-app-iptv luci-i18n-iptv-zh-cn kmod-mppe kmod-ovpn-backports"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
       run: bash scripts/verify-ponwrt.sh

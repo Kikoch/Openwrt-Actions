@@ -24,29 +24,41 @@
 #
 # 找不到源码文件时只警告不失败: build_dir 布局变动不应该把一个好构建判死。
 # ---------------------------------------------------------------
-PPE_C=$(find openwrt/build_dir -path '*linux-*' -name airoha_ppe.c 2>/dev/null | head -1)
-OLD_QOS='channel = dsa_port >= 0 ? dsa_port : port->id;'
-NEW_QOS='channel = dsa_port >= 0 ? 0 : port->id;'
+# 2026-10-06: 本断言**暂时停用** —— QOS_999_CHECK=no。
+#   与 ponwrt-diy-part1.sh 的 QOS_999_FIX 是一对, 必须同开同关:
+#   那边停了 999 号补丁、这边没停的话, 编译 3.5 小时后 OLD_QOS 必然还在,
+#   断言会 exit 1, 白编一次。
+# ---------------------------------------------------------------
+QOS_999_CHECK=no
 
-if [ -n "$PPE_C" ]; then
-  echo "=== 源码层校验: $PPE_C ==="
-  if grep -qF "$OLD_QOS" "$PPE_C"; then
-    echo "::error::LAN 口 QoS 通道修复未生效: airoha_ppe.c 仍是 dsa_port % 4 的通道映射"
-    echo "--- 残留的旧行 ---"
-    grep -nF "$OLD_QOS" "$PPE_C" || true
-    echo "--- AIROHA_FOE_CHANNEL 附近上下文 (看是哪个分支: PON if 分支 / else 分支) ---"
-    grep -n -B6 -A3 'AIROHA_FOE_CHANNEL' "$PPE_C" || true
-    exit 1
-  fi
-  if grep -qF "$NEW_QOS" "$PPE_C"; then
-    echo "=== LAN 口 QoS 通道修复已确认落到内核源码 ==="
-    grep -nF "$NEW_QOS" "$PPE_C"
+if [ "$QOS_999_CHECK" = "yes" ]; then
+  PPE_C=$(find openwrt/build_dir -path '*linux-*' -name airoha_ppe.c 2>/dev/null | head -1)
+  OLD_QOS='channel = dsa_port >= 0 ? dsa_port : port->id;'
+  NEW_QOS='channel = dsa_port >= 0 ? 0 : port->id;'
+
+  if [ -n "$PPE_C" ]; then
+    echo "=== 源码层校验: $PPE_C ==="
+    if grep -qF "$OLD_QOS" "$PPE_C"; then
+      echo "::error::LAN 口 QoS 通道修复未生效: airoha_ppe.c 仍是 dsa_port % 4 的通道映射"
+      echo "--- 残留的旧行 ---"
+      grep -nF "$OLD_QOS" "$PPE_C" || true
+      echo "--- AIROHA_FOE_CHANNEL 附近上下文 (看是哪个分支: PON if 分支 / else 分支) ---"
+      grep -n -B6 -A3 'AIROHA_FOE_CHANNEL' "$PPE_C" || true
+      exit 1
+    fi
+    if grep -qF "$NEW_QOS" "$PPE_C"; then
+      echo "=== LAN 口 QoS 通道修复已确认落到内核源码 ==="
+      grep -nF "$NEW_QOS" "$PPE_C"
+    else
+      echo "WARN: 两条特征行都没找到, 通道映射无法确认 (源码可能已被上游重构)"
+      grep -n 'AIROHA_FOE_CHANNEL' "$PPE_C" || true
+    fi
   else
-    echo "WARN: 两条特征行都没找到, 通道映射无法确认 (源码可能已被上游重构)"
-    grep -n 'AIROHA_FOE_CHANNEL' "$PPE_C" || true
+    echo "WARN: 未找到解压后的 airoha_ppe.c, 跳过源码层校验"
   fi
 else
-  echo "WARN: 未找到解压后的 airoha_ppe.c, 跳过源码层校验"
+  echo "=== [跳过] LAN 口 QoS 通道修复的源码层断言已停用 (QOS_999_CHECK=no) ==="
+  echo "=== 对应 ponwrt-diy-part1.sh 的 QOS_999_FIX=no: 本次产物不含该修复 ==="
 fi
 
 # ---------------------------------------------------------------

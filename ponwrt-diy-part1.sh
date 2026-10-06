@@ -81,69 +81,85 @@ done
 #   999 的 hunk 是按 925 的 "+" 行写出来的 (即 925 应用**之后**的文件状态),
 #   已用真 `patch` 本地验证: rc=0、行数不变、旧行消失。
 # ---------------------------------------------------------------
-PATCH_DIR=target/linux/airoha/patches-6.18
-if [ ! -d "$PATCH_DIR" ]; then
-  echo "FATAL: 找不到 $PATCH_DIR, LAN 口 QoS 通道修复无法应用"
-  exit 1
-fi
+# ⚠️ 2026-10-06: 本修复**暂时停用** —— QOS_999_FIX=no (见下方开关)。
+#   停用时上游 158 / 915-02 / 925 补丁保持原样 -> lan2/lan3 仍会卡在
+#   ~500 Mbps。这是有意为之: 先出一条不含任何本地内核改动的干净基线。
+#
+#   开关必须与 scripts/verify-ponwrt.sh 里的 QOS_999_CHECK 同开同关:
+#     只开这里、没开那边 -> 编译 3.5 小时后被源码层断言判死 (OLD_QOS 必然还在)
+#     只开那边、没开这里 -> 断言形同虚设 (永远走不到 NEW_QOS 分支)
+# ---------------------------------------------------------------
+QOS_999_FIX=no
 
-# 卫生: 清掉可能残留的备份文件 (OpenWrt 会把整个补丁目录复制进内核树, 别留垃圾)
-rm -f "$PATCH_DIR"/*.bak "$PATCH_DIR"/*.tmpfix 2>/dev/null || true
+if [ "$QOS_999_FIX" = "yes" ]; then
+  PATCH_DIR=target/linux/airoha/patches-6.18
+  if [ ! -d "$PATCH_DIR" ]; then
+    echo "FATAL: 找不到 $PATCH_DIR, LAN 口 QoS 通道修复无法应用"
+    exit 1
+  fi
 
-OLD_LINE='channel = dsa_port >= 0 ? dsa_port : port->id;'
-P999="$PATCH_DIR/999-airoha-ppe-force-dsa-qos-channel.patch"
+  # 卫生: 清掉可能残留的备份文件 (OpenWrt 会把整个补丁目录复制进内核树, 别留垃圾)
+  rm -f "$PATCH_DIR"/*.bak "$PATCH_DIR"/*.tmpfix 2>/dev/null || true
 
-# 改前先数一遍引用它的补丁文件 (预期 3 个: 158 / 915-02 / 925)。
-# 这里只做报告与健全性检查 —— 真正的改动全部落在 999 补丁里, 不碰上游补丁。
-REF_FILES=$(grep -rlF "$OLD_LINE" "$PATCH_DIR" 2>/dev/null | wc -l | tr -d ' ')
-echo "=== '$OLD_LINE' 被 $REF_FILES 个补丁文件引用 (预期 3: 158 / 915-02 / 925) ==="
-if [ "$REF_FILES" -lt 2 ]; then
-  echo "FATAL: 引用该表达式的补丁文件少于 2 个, 上游结构可能已变, 拒绝盲改"
-  exit 1
-fi
+  OLD_LINE='channel = dsa_port >= 0 ? dsa_port : port->id;'
+  P999="$PATCH_DIR/999-airoha-ppe-force-dsa-qos-channel.patch"
 
-# 生成 999 号补丁。用 printf 显式写 \t, 避免编辑器把 tab 存成空格。
-{
-  printf '%s\n' '--- a/drivers/net/ethernet/airoha/airoha_ppe.c'
-  printf '%s\n' '+++ b/drivers/net/ethernet/airoha/airoha_ppe.c'
-  printf '%s\n' '@@ -483,7 +483,7 @@ static int airoha_ppe_foe_entry_prepare('
-  printf ' \t\t\t\tchannel = FIELD_GET(AIROHA_PON_QDMA_TCONT_MASK,\n'
-  printf ' \t\t\t\t\t\t\t\tpon_tag);\n'
-  printf ' \t\t\t} else {\n'
-  printf -- '-\t\t\t\tchannel = dsa_port >= 0 ? dsa_port : port->id;\n'
-  printf -- '+\t\t\t\tchannel = dsa_port >= 0 ? 0 : port->id;\n'
-  printf ' \t\t\t\tchannel %%= AIROHA_NUM_QOS_CHANNELS;\n'
-  printf ' \t\t\t}\n'
-  printf ' \t\t\tpriority = rt_tos2priority(dsfield);\n'
-} > "$P999"
+  # 改前先数一遍引用它的补丁文件 (预期 3 个: 158 / 915-02 / 925)。
+  # 这里只做报告与健全性检查 —— 真正的改动全部落在 999 补丁里, 不碰上游补丁。
+  REF_FILES=$(grep -rlF "$OLD_LINE" "$PATCH_DIR" 2>/dev/null | wc -l | tr -d ' ')
+  echo "=== '$OLD_LINE' 被 $REF_FILES 个补丁文件引用 (预期 3: 158 / 915-02 / 925) ==="
+  if [ "$REF_FILES" -lt 2 ]; then
+    echo "FATAL: 引用该表达式的补丁文件少于 2 个, 上游结构可能已变, 拒绝盲改"
+    exit 1
+  fi
 
-# 断言 1: 补丁必须是 11 行 (3 行头部 + 8 行 hunk)
-P999_LINES=$(wc -l < "$P999" | tr -d ' ')
-if [ "$P999_LINES" != "11" ]; then
-  echo "FATAL: $P999 行数 $P999_LINES != 11"
+  # 生成 999 号补丁。用 printf 显式写 \t, 避免编辑器把 tab 存成空格。
+  {
+    printf '%s\n' '--- a/drivers/net/ethernet/airoha/airoha_ppe.c'
+    printf '%s\n' '+++ b/drivers/net/ethernet/airoha/airoha_ppe.c'
+    printf '%s\n' '@@ -483,7 +483,7 @@ static int airoha_ppe_foe_entry_prepare('
+    printf ' \t\t\t\tchannel = FIELD_GET(AIROHA_PON_QDMA_TCONT_MASK,\n'
+    printf ' \t\t\t\t\t\t\t\tpon_tag);\n'
+    printf ' \t\t\t} else {\n'
+    printf -- '-\t\t\t\tchannel = dsa_port >= 0 ? dsa_port : port->id;\n'
+    printf -- '+\t\t\t\tchannel = dsa_port >= 0 ? 0 : port->id;\n'
+    printf ' \t\t\t\tchannel %%= AIROHA_NUM_QOS_CHANNELS;\n'
+    printf ' \t\t\t}\n'
+    printf ' \t\t\tpriority = rt_tos2priority(dsfield);\n'
+  } > "$P999"
+
+  # 断言 1: 补丁必须是 11 行 (3 行头部 + 8 行 hunk)
+  P999_LINES=$(wc -l < "$P999" | tr -d ' ')
+  if [ "$P999_LINES" != "11" ]; then
+    echo "FATAL: $P999 行数 $P999_LINES != 11"
+    cat "$P999"
+    exit 1
+  fi
+  # 断言 2: 那两条 +/- 行各恰好一次
+  N_MINUS=$(grep -c '^-.*dsa_port >= 0 ? dsa_port : port->id;' "$P999" 2>/dev/null || true)
+  N_PLUS=$(grep -c '^+.*dsa_port >= 0 ? 0 : port->id;' "$P999" 2>/dev/null || true)
+  if [ "$N_MINUS" != "1" ] || [ "$N_PLUS" != "1" ]; then
+    echo "FATAL: $P999 的 +/- 行数不对 (minus=$N_MINUS plus=$N_PLUS, 期望各 1)"
+    cat "$P999"
+    exit 1
+  fi
+  # 断言 3: 缩进必须是真 tab。检查有没有 "- " / "+ " 这种"tab 被存成空格"的行。
+  # (不用 grep -P: macOS 的 BSD grep 不支持, 会静默失败。)
+  if grep -qE '^[-+] ' "$P999"; then
+    echo "FATAL: $P999 里出现 '- ' 或 '+ ' 开头的行 —— tab 被写成了空格, 补丁会应用失败"
+    grep -nE '^[-+] ' "$P999"
+    exit 1
+  fi
+
+  echo "=== 999 号补丁已就位 (排在所有上游补丁之后, 上游补丁未改动) ==="
   cat "$P999"
-  exit 1
+  echo "=== LAN 口 QoS 通道修复已注入: DSA 目标端口全部走通道 0 ==="
+  echo "=== (lan2/lan3 由通道 2/3 改到通道 0; lan1/lan4 本来就是通道 0, 不受影响) ==="
+else
+  echo "=== [跳过] 999 号补丁未注入 (QOS_999_FIX=no) ==="
+  echo "=== 上游 158 / 915-02 / 925 保持原样 —— lan2/lan3 仍会卡 ~500 Mbps (有意为之) ==="
+  echo "=== 重开: 本文件 QOS_999_FIX=yes + scripts/verify-ponwrt.sh QOS_999_CHECK=yes ==="
 fi
-# 断言 2: 那两条 +/- 行各恰好一次
-N_MINUS=$(grep -c '^-.*dsa_port >= 0 ? dsa_port : port->id;' "$P999" 2>/dev/null || true)
-N_PLUS=$(grep -c '^+.*dsa_port >= 0 ? 0 : port->id;' "$P999" 2>/dev/null || true)
-if [ "$N_MINUS" != "1" ] || [ "$N_PLUS" != "1" ]; then
-  echo "FATAL: $P999 的 +/- 行数不对 (minus=$N_MINUS plus=$N_PLUS, 期望各 1)"
-  cat "$P999"
-  exit 1
-fi
-# 断言 3: 缩进必须是真 tab。检查有没有 "- " / "+ " 这种"tab 被存成空格"的行。
-# (不用 grep -P: macOS 的 BSD grep 不支持, 会静默失败。)
-if grep -qE '^[-+] ' "$P999"; then
-  echo "FATAL: $P999 里出现 '- ' 或 '+ ' 开头的行 —— tab 被写成了空格, 补丁会应用失败"
-  grep -nE '^[-+] ' "$P999"
-  exit 1
-fi
-
-echo "=== 999 号补丁已就位 (排在所有上游补丁之后, 上游补丁未改动) ==="
-cat "$P999"
-echo "=== LAN 口 QoS 通道修复已注入: DSA 目标端口全部走通道 0 ==="
-echo "=== (lan2/lan3 由通道 2/3 改到通道 0; lan1/lan4 本来就是通道 0, 不受影响) ==="
 
 # ---------------------------------------------------------------
 # lan1 (2.5G) 冷启动不开链修复 —— EN8811H 复位时序
