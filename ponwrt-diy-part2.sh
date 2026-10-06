@@ -59,7 +59,7 @@ make defconfig
 
 # 诊断 (2026-10-06): 无论后面哪条断言炸, 先把相关符号的**真实值**发成注解。
 # 这样一次运行就能定位, 不用"改一点推一次"地猜。
-SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL' .config | sort -u || true)"
+SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG' .config | sort -u || true)"
 echo "::warning::$(esc "defconfig 之后的相关符号实况:${NL}${SYMS}")"
 
 # 早失败: MULTI_PROFILE 若还开着, 后面会白编两个多小时, 而且编译步骤
@@ -111,9 +111,28 @@ done
 echo "=== 指定包含的包全部命中: openclash / adblock-fast ==="
 
 # 强校验: 明确砍掉的包不许复活 (2026-10-06 编译耗时优化)。
-# 这些都是"仅为对齐 18.1、实测未启用"的残留, 每个 kmod 都要走一遍内核模块编译。
-# 若被别的包 DEPENDS/select 拉回来, 这里 40 秒内拦住, 不用白编 3.5 小时。
-FORBID_PKG_LIST="shellsync kmod-macvlan luci-app-iptv luci-i18n-iptv-zh-cn kmod-mppe kmod-ovpn-backports"
+#
+# ⚠️ 这里**只列真正砍得掉的包**。run #26 的注解实测纠正了一个误判, 记下来免得再犯:
+#
+#   shellsync / kmod-macvlan / kmod-mppe 关不掉, 因为它们是 ppp 的硬依赖 →
+#
+#     package/network/services/ppp/Makefile:56   Package/ppp DEPENDS:= ... +shellsync +kmod-mppe
+#     package/network/services/shellsync/Makefile:12  Package/shellsync DEPENDS:=+libpthread +kmod-macvlan
+#
+#   而 ppp 又是目标默认包 (include/target.mk:52 DEFAULT_PACKAGES.router 含 ppp + ppp-mod-pppoe),
+#   由 scripts/target-metadata.pl:262 生成 `select DEFAULT_ppp` → package-metadata.pl:355 的
+#   `default y if DEFAULT_<pkg>` 直接把 PACKAGE_ppp 顶成 y, 再经 scripts/package-metadata.pl
+#   mconf_depends() 的 `$m = "select"` 把 `+shellsync` / `+kmod-mppe` / `+kmod-macvlan`
+#   全部升成 `select PACKAGE_xxx`。
+#
+#   结论: select 优先级高于用户写的 `# ... is not set`, 写多少遍都没用。
+#   要真关掉只能改 ppp 的 Makefile —— 那等于砍掉 PPPoE 的 MPPE 加密与多拨同步, 不做。
+#   收益本就以秒计 (shellsync 是单个 .c, 两个各一个 .ko), 不值得为它动核心包。
+#
+#   luci-app-iptv(+i18n) / kmod-ovpn-backports 则确实无人 select (iptv 只被本仓 extra.config 打开;
+#   kmod-ovpn-backports 的上游 select 源是 openvpn, 而 openvpn 未启用) —— 实测已成功关闭。
+FORBID_PKG_LIST="luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports"
+FORBID_PKG_RE="luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-ovpn-backports"
 HIT=""
 for pkg in $FORBID_PKG_LIST; do
   if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
@@ -123,11 +142,12 @@ done
 if [ -n "$HIT" ]; then
   echo "FATAL: 已砍掉的包又冒出来了:$HIT"
   echo "       多半是别的包 DEPENDS/select 它们; =m 也算(照样编译, 只是不进镜像)。"
-  grep -E "^CONFIG_PACKAGE_(shellsync|kmod-macvlan|luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-mppe|kmod-ovpn-backports)=" .config || true
-  err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E "^CONFIG_PACKAGE_(shellsync|kmod-macvlan|luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-mppe|kmod-ovpn-backports)=" .config || true)"
+  grep -E "^CONFIG_PACKAGE_(${FORBID_PKG_RE})=" .config || true
+  err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E "^CONFIG_PACKAGE_(${FORBID_PKG_RE})=" .config || true)"
   exit 1
 fi
-echo "=== 已砍包确认全部关闭: shellsync / macvlan / iptv / mppe / ovpn ==="
+echo "=== 已砍包确认全部关闭: luci-app-iptv(+i18n) / kmod-ovpn-backports ==="
+echo "=== (shellsync / kmod-macvlan / kmod-mppe 是 ppp 的硬依赖, 保留, 见上方注释) ==="
 
 # 强校验: 内核与全部 kmod 不再产 DWARF 调试信息 (编译时间 + 磁盘)
 if grep -qE "^CONFIG_KERNEL_DEBUG_INFO(_REDUCED)?=y" .config; then

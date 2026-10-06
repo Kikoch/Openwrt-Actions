@@ -334,8 +334,15 @@ jobs:
         REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
         # 官方 configs/release.config 自带 luci-app-upnp, 已在 extra.config 里
         # 反向覆盖; 这里在产物层再卡一道, 防止依赖链把它 select 回来。
-        # 后半段是 2026-10-06 砍掉的包（实测未启用的残留, 每个 kmod 都要走一遍内核模块编译）。
-        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables shellsync kmod-macvlan luci-app-iptv luci-i18n-iptv-zh-cn kmod-mppe kmod-ovpn-backports"
+        # 后半段是 2026-10-06 砍掉的包 —— **只能列真的砍得掉的**:
+        #   luci-app-iptv(+i18n) 无人 select; kmod-ovpn-backports 的上游 select 源
+        #   (openvpn) 未启用。两者实测已成功关闭。
+        #   注意**不要**把 shellsync / kmod-macvlan / kmod-mppe 放进来:
+        #   它们是 ppp 的硬依赖 (Package/ppp DEPENDS:= ... +shellsync +kmod-mppe,
+        #   Package/shellsync 又依赖 +kmod-macvlan), 而 ppp 在
+        #   include/target.mk 的 DEFAULT_PACKAGES.router 里 -> 一定在产物中。
+        #   放进来会让 verify 步骤必然失败 (run #26 的教训)。
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
       run: bash scripts/verify-ponwrt.sh
