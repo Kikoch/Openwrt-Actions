@@ -32,5 +32,65 @@ for d in "$PWD/dl/go-mod-cache" /workdir/openwrt/dl/go-mod-cache; do
   fi
 done
 
+# ---------------------------------------------------------------
+# LAN 口 QoS 通道修复 (2026-10-06 v7 定案, lan2/lan3 卡 500M)
+#
+# 症状: lan2 / lan3 上网被卡在 ~500 Mbps, lan4 满速 1000, lan1(2.5G) 满速。
+#       到网关速率正常 —— 因为到网关是本机 CPU 发包, 走的是另一条选通道路径。
+#
+# 根因 (实测定案, 不是推测):
+#   airoha_ppe.c 的 FOE 入口按 DSA 端口号选 QDMA QoS 通道:
+#       channel = dsa_port >= 0 ? dsa_port : port->id;
+#       channel = channel % AIROHA_NUM_QOS_CHANNELS;   /* 4 */
+#   => lan2 -> 通道 2, lan3 -> 通道 3, lan4 -> 通道 0, lan1 -> 通道 0, 通道 1 空置。
+#
+#   AN7581 上通道 0 实测能跑满: E5 实验 (客户端插在 lan1) 1 秒峰值 119,638 pps,
+#   同秒 lan1.tx_bytes = 182.38 MB/s = 1459 Mbps, corr(ch0, lan1.tx_bytes)=0.999。
+#   而通道 2/3 在单口独占、无任何竞争时也只有 ~500 Mbps
+#   (E1: 客户端在 lan3, ch3 1s 峰值 47,628 pps ≈ 571 Mbps, 同秒 ch0 仅 1 pps)。
+#   lan4 之所以一直满速, 就是因为它 (4%4=0) 恰好落在通道 0。
+#
+#   已排除的方向: TRTCM 令牌桶表用读事务整表读完 = 全 0; TXQ close 全开;
+#   CHAN_QOS_MODE=0x11111111 全 SP; 用户态/openclash 无关。详见工作区报告
+#   《lan2-4-只有一个口跑满-根因分析.md》与 Obsidian《...根因定位》笔记。
+#
+# 修法: 让所有 DSA 目标端口的 FOE 入口统一走通道 0 (已经实测证明最快的那条)。
+#   只改 158 号补丁里那一行的右值, 行数完全不变 ->
+#   后面 915-02 补丁把那两行当 context, 依旧能干净应用, 不用动它。
+#
+# 注意: 158 是**上游主线补丁**(Lorenzo Bianconi, netdev, acked by Jakub Kicinski,
+#   提交说明原话 "This allows HTB shaping to be applied to HW accelerated
+#   traffic"), ImmortalWrt 主线 r41341 里同样存在 ->
+#   **这不是 PonWrt 独有的差异**, 两条主线一样中招, 所以只能在本地再叠一层修正。
+# ---------------------------------------------------------------
+P158=$(ls target/linux/airoha/patches-6.18/158-*.patch 2>/dev/null | head -1)
+if [ -z "$P158" ]; then
+  echo "FATAL: 找不到 target/linux/airoha/patches-6.18/158-*.patch"
+  echo "       LAN 口 QoS 通道修复无法应用, 中止 (不要产出没有修复的固件)"
+  exit 1
+fi
+
+OLD_LINE='channel = dsa_port >= 0 ? dsa_port : port->id;'
+NEW_LINE='channel = dsa_port >= 0 ? 0 : port->id;'
+
+# 唯一性断言: 不是刚好 1 处就拒绝盲改 (上游改结构时会在这里拦住)
+CNT=$(grep -cF "$OLD_LINE" "$P158" 2>/dev/null || true)
+if [ "$CNT" != "1" ]; then
+  echo "FATAL: $P158 中 '$OLD_LINE' 出现 $CNT 次 (期望恰好 1 次)"
+  grep -nF "$OLD_LINE" "$P158" || true
+  exit 1
+fi
+
+echo "--- 修改前 ---"
+grep -nF "$OLD_LINE" "$P158"
+sed -i.bak "s|$OLD_LINE|$NEW_LINE|" "$P158"
+if grep -qF "$OLD_LINE" "$P158"; then
+  echo "FATAL: sed 替换失败, $P158 里旧行还在"
+  exit 1
+fi
+echo "--- 修改后 ---"
+grep -nF "$NEW_LINE" "$P158"
+echo "=== LAN 口 QoS 通道修复已注入: DSA 目标端口全部走通道 0 ==="
+echo "=== (lan2/lan3 由通道 2/3 改到通道 0; lan1/lan4 本来就是通道 0, 不受影响) ==="
 
 exit 0
