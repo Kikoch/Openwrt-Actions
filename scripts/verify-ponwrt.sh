@@ -32,6 +32,10 @@ if [ -n "$PPE_C" ]; then
   echo "=== 源码层校验: $PPE_C ==="
   if grep -qF "$OLD_QOS" "$PPE_C"; then
     echo "::error::LAN 口 QoS 通道修复未生效: airoha_ppe.c 仍是 dsa_port % 4 的通道映射"
+    echo "--- 残留的旧行 ---"
+    grep -nF "$OLD_QOS" "$PPE_C" || true
+    echo "--- AIROHA_FOE_CHANNEL 附近上下文 (看是哪个分支: PON if 分支 / else 分支) ---"
+    grep -n -B6 -A3 'AIROHA_FOE_CHANNEL' "$PPE_C" || true
     exit 1
   fi
   if grep -qF "$NEW_QOS" "$PPE_C"; then

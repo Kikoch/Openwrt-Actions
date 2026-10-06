@@ -54,42 +54,94 @@ done
 #   CHAN_QOS_MODE=0x11111111 全 SP; 用户态/openclash 无关。详见工作区报告
 #   《lan2-4-只有一个口跑满-根因分析.md》与 Obsidian《...根因定位》笔记。
 #
-# 修法: 让所有 DSA 目标端口的 FOE 入口统一走通道 0 (已经实测证明最快的那条)。
-#   只改 158 号补丁里那一行的右值, 行数完全不变 ->
-#   后面 915-02 补丁把那两行当 context, 依旧能干净应用, 不用动它。
+# 修法: 新增一个编号最大的 999 号补丁, 排在所有补丁之后, 专门重写 else 分支那一行,
+#   让 DSA 目标端口统一走通道 0 (唯一实测能跑满的那条)。**上游补丁一个字都不动。**
 #
 # 注意: 158 是**上游主线补丁**(Lorenzo Bianconi, netdev, acked by Jakub Kicinski,
 #   提交说明原话 "This allows HTB shaping to be applied to HW accelerated
 #   traffic"), ImmortalWrt 主线 r41341 里同样存在 ->
 #   **这不是 PonWrt 独有的差异**, 两条主线一样中招, 所以只能在本地再叠一层修正。
+#
+# ⚠️ 关键坑 (run #23 实测踩到, 必读):
+#   这一行**不只**出现在 158 里。PonWrt 独有的 925 (add PON PPE offload metadata;
+#   openwrt/openwrt 与 immortalwrt 同路径都是 404, 本树独有) 把整段改写成 PON if/else,
+#   并在 else 分支里**原样把这一行又引入了一次**:
+#
+#       } else {
+#           channel = dsa_port >= 0 ? dsa_port : port->id;   <-- 又回来了
+#           channel %= AIROHA_NUM_QOS_CHANNELS;
+#       }
+#
+#   925 排在 158 与 915-02 之后 -> "只 sed 158" 会被 925 整个覆盖掉。
+#   run #23 就是这么挂的: 编译过了 36 分钟, 最后被源码层断言拦下, 报
+#   "airoha_ppe.c 仍是 dsa_port % 4 的通道映射"。
+#   (而且 925 里那条 "-" 行会因为 158 被改而 context 不匹配, 只靠 patch 的模糊匹配
+#    侥幸过关 —— 这种"靠侥幸"的改法不能用。)
+#
+#   999 的 hunk 是按 925 的 "+" 行写出来的 (即 925 应用**之后**的文件状态),
+#   已用真 `patch` 本地验证: rc=0、行数不变、旧行消失。
 # ---------------------------------------------------------------
-P158=$(ls target/linux/airoha/patches-6.18/158-*.patch 2>/dev/null | head -1)
-if [ -z "$P158" ]; then
-  echo "FATAL: 找不到 target/linux/airoha/patches-6.18/158-*.patch"
-  echo "       LAN 口 QoS 通道修复无法应用, 中止 (不要产出没有修复的固件)"
+PATCH_DIR=target/linux/airoha/patches-6.18
+if [ ! -d "$PATCH_DIR" ]; then
+  echo "FATAL: 找不到 $PATCH_DIR, LAN 口 QoS 通道修复无法应用"
   exit 1
 fi
+
+# 卫生: 清掉可能残留的备份文件 (OpenWrt 会把整个补丁目录复制进内核树, 别留垃圾)
+rm -f "$PATCH_DIR"/*.bak "$PATCH_DIR"/*.tmpfix 2>/dev/null || true
 
 OLD_LINE='channel = dsa_port >= 0 ? dsa_port : port->id;'
-NEW_LINE='channel = dsa_port >= 0 ? 0 : port->id;'
+P999="$PATCH_DIR/999-airoha-ppe-force-dsa-qos-channel.patch"
 
-# 唯一性断言: 不是刚好 1 处就拒绝盲改 (上游改结构时会在这里拦住)
-CNT=$(grep -cF "$OLD_LINE" "$P158" 2>/dev/null || true)
-if [ "$CNT" != "1" ]; then
-  echo "FATAL: $P158 中 '$OLD_LINE' 出现 $CNT 次 (期望恰好 1 次)"
-  grep -nF "$OLD_LINE" "$P158" || true
+# 改前先数一遍引用它的补丁文件 (预期 3 个: 158 / 915-02 / 925)。
+# 这里只做报告与健全性检查 —— 真正的改动全部落在 999 补丁里, 不碰上游补丁。
+REF_FILES=$(grep -rlF "$OLD_LINE" "$PATCH_DIR" 2>/dev/null | wc -l | tr -d ' ')
+echo "=== '$OLD_LINE' 被 $REF_FILES 个补丁文件引用 (预期 3: 158 / 915-02 / 925) ==="
+if [ "$REF_FILES" -lt 2 ]; then
+  echo "FATAL: 引用该表达式的补丁文件少于 2 个, 上游结构可能已变, 拒绝盲改"
   exit 1
 fi
 
-echo "--- 修改前 ---"
-grep -nF "$OLD_LINE" "$P158"
-sed -i.bak "s|$OLD_LINE|$NEW_LINE|" "$P158"
-if grep -qF "$OLD_LINE" "$P158"; then
-  echo "FATAL: sed 替换失败, $P158 里旧行还在"
+# 生成 999 号补丁。用 printf 显式写 \t, 避免编辑器把 tab 存成空格。
+{
+  printf '%s\n' '--- a/drivers/net/ethernet/airoha/airoha_ppe.c'
+  printf '%s\n' '+++ b/drivers/net/ethernet/airoha/airoha_ppe.c'
+  printf '%s\n' '@@ -483,7 +483,7 @@ static int airoha_ppe_foe_entry_prepare('
+  printf ' \t\t\t\tchannel = FIELD_GET(AIROHA_PON_QDMA_TCONT_MASK,\n'
+  printf ' \t\t\t\t\t\t\t\tpon_tag);\n'
+  printf ' \t\t\t} else {\n'
+  printf -- '-\t\t\t\tchannel = dsa_port >= 0 ? dsa_port : port->id;\n'
+  printf -- '+\t\t\t\tchannel = dsa_port >= 0 ? 0 : port->id;\n'
+  printf ' \t\t\t\tchannel %%= AIROHA_NUM_QOS_CHANNELS;\n'
+  printf ' \t\t\t}\n'
+  printf ' \t\t\tpriority = rt_tos2priority(dsfield);\n'
+} > "$P999"
+
+# 断言 1: 补丁必须是 11 行 (3 行头部 + 8 行 hunk)
+P999_LINES=$(wc -l < "$P999" | tr -d ' ')
+if [ "$P999_LINES" != "11" ]; then
+  echo "FATAL: $P999 行数 $P999_LINES != 11"
+  cat "$P999"
   exit 1
 fi
-echo "--- 修改后 ---"
-grep -nF "$NEW_LINE" "$P158"
+# 断言 2: 那两条 +/- 行各恰好一次
+N_MINUS=$(grep -c '^-.*dsa_port >= 0 ? dsa_port : port->id;' "$P999" 2>/dev/null || true)
+N_PLUS=$(grep -c '^+.*dsa_port >= 0 ? 0 : port->id;' "$P999" 2>/dev/null || true)
+if [ "$N_MINUS" != "1" ] || [ "$N_PLUS" != "1" ]; then
+  echo "FATAL: $P999 的 +/- 行数不对 (minus=$N_MINUS plus=$N_PLUS, 期望各 1)"
+  cat "$P999"
+  exit 1
+fi
+# 断言 3: 缩进必须是真 tab。检查有没有 "- " / "+ " 这种"tab 被存成空格"的行。
+# (不用 grep -P: macOS 的 BSD grep 不支持, 会静默失败。)
+if grep -qE '^[-+] ' "$P999"; then
+  echo "FATAL: $P999 里出现 '- ' 或 '+ ' 开头的行 —— tab 被写成了空格, 补丁会应用失败"
+  grep -nE '^[-+] ' "$P999"
+  exit 1
+fi
+
+echo "=== 999 号补丁已就位 (排在所有上游补丁之后, 上游补丁未改动) ==="
+cat "$P999"
 echo "=== LAN 口 QoS 通道修复已注入: DSA 目标端口全部走通道 0 ==="
 echo "=== (lan2/lan3 由通道 2/3 改到通道 0; lan1/lan4 本来就是通道 0, 不受影响) ==="
 
@@ -135,7 +187,15 @@ do
     grep -nF "$O" "$DTS_XG" || true
     exit 1
   fi
-  sed -i.bak "s|$O|$N|" "$DTS_XG"
+  # 不用 sed -i.bak: 会在 dts 目录里留下 .bak, 可能被 Makefile 的通配扫进去
+  TMP_DTS="$DTS_XG.tmpfix"
+  sed "s|$O|$N|" "$DTS_XG" > "$TMP_DTS"
+  if [ "$(wc -l < "$DTS_XG")" != "$(wc -l < "$TMP_DTS")" ]; then
+    echo "FATAL: $DTS_XG 替换后行数变了, 拒绝写回"
+    rm -f "$TMP_DTS"
+    exit 1
+  fi
+  mv "$TMP_DTS" "$DTS_XG"
   if grep -qF "$O" "$DTS_XG"; then
     echo "FATAL: sed 替换失败, 旧值还在: $O"
     exit 1
