@@ -184,12 +184,30 @@ fi
 #
 # 修法: 改回主线一致的 10ms/20ms。DTS 是纯文本, 不需要碰补丁机制。
 #       只改内容不改行数, 注释也一起改。
+#
+# 2026-10-07 状态: 上游 master 已自行修复 (69cd3e269, 2026-10-06), 值同为我们
+#       要的 10ms/20ms -> 在源码 pin = 04986da1e 时这段是 no-op (幂等判断见下方)。
+#       保留本段是为了能随时回退到老 pin (5651948f, 1s/100ms)。
 # ---------------------------------------------------------------
 DTS_XG=target/linux/airoha/dts/an7581-nokia_xg-040g-md-common.dtsi
 if [ ! -f "$DTS_XG" ]; then
   echo "FATAL: 找不到 $DTS_XG, lan1 复位时序修复无法应用"
   exit 1
 fi
+
+# ⚠️ 2026-10-07: 先判「上游是不是已经自己修了」。
+#   上游 commit 69cd3e269 (2026-10-06, "airoha: restore EN8811H reset timing")
+#   已把本设备的 en8811 节点改成 reset-assert-us = <10000> / deassert = <20000>
+#   —— 与我们本来要改成的值完全一致, 连那行注释都删了。
+#   旧逻辑在这种情况下会在下面的循环里 grep 到 0 次 -> 直接 FATAL,
+#   把整个构建在 DIY part1 判死 (新源码 pin 04986da1e 上必然发生)。
+#   所以: 新源码走"跳过"分支, 老 pin (5651948f: 1s/100ms) 照旧走替换分支。
+GOOD_ASSERT='reset-assert-us = <10000>;'
+GOOD_DEASSERT='reset-deassert-us = <20000>;'
+if grep -qF "$GOOD_ASSERT" "$DTS_XG" && grep -qF "$GOOD_DEASSERT" "$DTS_XG"; then
+  echo "=== [跳过] 上游已内置 EN8811H 复位时序修复 (10ms/20ms, 69cd3e269), 无需本地改动 ==="
+else
+  echo "=== 上游未修 (老源码): 本地改回主线值 1s/100ms -> 10ms/20ms ==="
 
 for pair in \
   'reset-assert-us = <1000000>;|reset-assert-us = <10000>;' \
@@ -218,10 +236,11 @@ do
   fi
 done
 
-# 注释跟着改 (同样只改内容不改行数)
-sed -i 's|Hold reset for 1 second and wait 100 ms before probing EN8811H\.|Hold reset for 10 ms and wait 20 ms before probing EN8811H.|' "$DTS_XG"
+  # 注释行也一起改 (只有老源码里才有那行注释; 上游修过后它就没了, 所以放在替换分支里)
+  sed -i 's|Hold reset for 1 second and wait 100 ms before probing EN8811H\.|Hold reset for 10 ms and wait 20 ms before probing EN8811H.|' "$DTS_XG"
+  echo "=== EN8811H 复位时序已改回主线值 (1s/100ms -> 10ms/20ms) ==="
+fi
 
-echo "=== EN8811H 复位时序已改回主线值 (1s/100ms -> 10ms/20ms) ==="
 grep -nE "reset-(assert|deassert)-us|Hold reset for" "$DTS_XG"
 
 exit 0

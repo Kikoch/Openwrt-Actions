@@ -2,7 +2,10 @@
 # Build PonWrt (Nokia XG-040G-MD UBI, 保留 PON 光口)
 # 构建方法对齐 PonWrt 官方 CI (.github/workflows/release.yml):
 #   kconfig.pl 合并 configs + make defconfig + make
-# 源码 pin 到已知良好 commit（usb-sfp 重构前），可用 input 覆盖
+# 源码 pin 到上游 master HEAD（2026-10-07 同步, 04986da1e, 2026-10-06）。
+#   已含 usb-sfp 重构 (3cca3ed60) 与 EN8811H 复位时序主线修复 (69cd3e269,
+#   与本地 diy-part1 的 lan1 修复同值 -> diy-part1 已做成幂等)。
+#   历史已知良好版本: 5651948f9d (2026-09-25, usb-sfp 重构前)。
 # feeds 同步 pin 到同期提交，保证可复现
 # 编译后执行 scripts/verify-firmware.sh 做产物层校验
 #=================================================
@@ -57,9 +60,9 @@ on:
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
-  # 已知良好版本: 2026-09-25, PON feeds/configs 齐备, usb-sfp 重构合入前。
-  # 注意: r41341-f44d1535b4 (f44d1535b4, 9/18) 当时树内还没有 PON 包，不能用！
-  REPO_REF: 5651948f9d6e9aa48e22338d6abe650019988448
+  # 2026-10-07 同步上游 master HEAD (2026-10-06 15:17 UTC)。
+  # 旧 pin 5651948f9d (2026-09-25) 落后 132 commits; f44d1535b4 (9/18) 依旧不能用。
+  REPO_REF: 04986da1e63cf2c52521c1aa737ee5d59e05986d
   CONFIG_FILE: ponwrt-extra.config
   DIY_P1_SH: ponwrt-diy-part1.sh
   DIY_P2_SH: ponwrt-diy-part2.sh
