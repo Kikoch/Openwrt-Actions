@@ -31,3 +31,20 @@ kmod-zram
 # openclash: run #16 时包既没进 feed 也没进产物, 刷完才发现没有代理可用。
 #            现在 diy-part2 有编译前校验, 这里再做一道产物层校验, 双重保险。
 luci-app-openclash
+
+# 2026-10-08 需求项 (OpenClash / WireGuard / DDNS(dnspod) / zram / bootstrap 主题)
+# 在 manifest 层再确认一次 —— diy-part2 只保证 .config 里 =y,
+# 产物里到底有没有得看这里。
+#
+# 注意只列**真实存在且具名**的包:
+#   - luci-i18n-ddns-zh-cn 存在 (po/zh_Hans/ddns.po) -> 列
+#   - luci-app-openclash 的中文在包体内 (po/zh-cn 经 po2lmo 打进包),
+#     上游没有 luci-i18n-openclash-zh-cn 这个包 -> 不列
+#   - luci-proto-wireguard 无 po/ 目录, 没有 luci-i18n-wireguard-zh-cn -> 不列
+#   - zram 无 LuCI 页面, 没有翻译包 -> 只列本体
+luci-app-ddns
+luci-i18n-ddns-zh-cn
+ddns-scripts-dnspod
+luci-proto-wireguard
+wireguard-tools
+luci-theme-bootstrap

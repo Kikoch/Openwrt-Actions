@@ -345,7 +345,12 @@ jobs:
         #   Package/shellsync 又依赖 +kmod-macvlan), 而 ppp 在
         #   include/target.mk 的 DEFAULT_PACKAGES.router 里 -> 一定在产物中。
         #   放进来会让 verify 步骤必然失败 (run #26 的教训)。
-        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports"
+        # 2026-10-08 追加: 除 bootstrap 外的 5 个主题一律禁止出现在产物里。
+        #   需求是"移除其余主题文件, 仅保留 bootstrap"。.config 层已在
+        #   ponwrt-extra.config 反向覆盖 + ponwrt-diy-part2.sh 硬断言,
+        #   这里做产物层第三道 —— 主题包是真的会进 manifest 的,
+        #   任何一路被 select 顶回来都会在这里判死。
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports luci-theme-argon luci-theme-footstrap luci-theme-material luci-theme-openwrt luci-theme-openwrt-2020"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
       run: bash scripts/verify-ponwrt.sh

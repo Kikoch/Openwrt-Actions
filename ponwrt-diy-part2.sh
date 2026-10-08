@@ -63,7 +63,7 @@ make defconfig
 # 一条硬断言 (ppp 那三个包就是教训) —— 关没关掉看注解即可。
 # 2026-10-06 追加: WiFi 全家桶 / 冗余 PHY / hwmon / i2c-core 同样只观测,
 #   因为 feeds 里的 luci-app-* 有可能 DEPENDS wpad 把它们 select 回来。
-SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|libi2c|i2c-tools|i2c-core|hwmon-core|mt76|mt791|cfg80211|mac80211|PACKAGE_wpad|PACKAGE_hostapd|wireless-regdb|wifi-scripts|nl80211|PACKAGE_iw=|zn515|phy-realtek|phy-maxlinear|rtl826x|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG' .config | sort -u || true)"
+SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|libi2c|i2c-tools|i2c-core|hwmon-core|mt76|mt791|cfg80211|mac80211|PACKAGE_wpad|PACKAGE_hostapd|wireless-regdb|wifi-scripts|nl80211|PACKAGE_iw=|zn515|phy-realtek|phy-maxlinear|rtl826x|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG|luci-theme|luci-i18n-ddns|luci-proto-wireguard|PACKAGE_zram|PACKAGE_kmod-zram|udptunnel|PACKAGE_luci-compat|nft-tproxy|inet-diag' .config | sort -u || true)"
 echo "::warning::$(esc "defconfig 之后的相关符号实况:${NL}${SYMS}")"
 
 # 早失败: MULTI_PROFILE 若还开着, 后面会白编两个多小时, 而且编译步骤
@@ -103,7 +103,22 @@ echo "=== 关键驱动校验通过 ==="
 #   —— 默默删掉那一行。编译照 green, 固件里就是没有。run #16 的 openclash
 #   就是这么失踪的 (固定的 luci/packages feed 里压根没这个包)。这里几十秒挡住,
 #   省得白编两小时再靠 manifest 反查。
-for pkg in luci-app-openclash luci-app-adblock-fast ; do
+#
+# 2026-10-08 扩表: 把 "OpenClash / WireGuard / DDNS(dnspod) / zram / bootstrap 主题"
+#   这组需求项全部纳入断言 (本体 + 中文翻译 + 内核依赖)。
+#   注意这里**只放已核实存在于本 pin feed 里的符号** —— 放错一个 (比如上游没有
+#   的 luci-i18n-openclash-zh-cn / luci-i18n-wireguard-zh-cn) 就会把好构建判死:
+#     luci-app-openclash      luci feed applications/ (自带 po/zh-cn, 中文在包体内)
+#     luci-i18n-ddns-zh-cn    luci feed applications/luci-app-ddns/po/zh_Hans/
+#     luci-proto-wireguard    luci feed protocols/ (无 po/, 故无 i18n 包)
+#     ddns-scripts-dnspod     packages feed, luci-app-ddns 的后端脚本
+#     zram-swap / kmod-zram   packages feed, 无 LuCI 页面故无 i18n
+for pkg in luci-app-openclash luci-app-adblock-fast \
+           luci-app-ddns luci-i18n-ddns-zh-cn ddns-scripts-dnspod \
+           luci-proto-wireguard wireguard-tools kmod-wireguard \
+           kmod-udptunnel4 kmod-udptunnel6 \
+           zram-swap kmod-zram \
+           luci-theme-bootstrap ; do
   if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
     echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
     echo "       luci pin 落在 ed0441b1(2026-10-02 merge) 之前的话, openclash 等"
@@ -112,7 +127,29 @@ for pkg in luci-app-openclash luci-app-adblock-fast ; do
     exit 1
   fi
 done
-echo "=== 指定包含的包全部命中: openclash / adblock-fast ==="
+echo "=== 指定包含的包全部命中: openclash / adblock-fast / ddns(+zh-cn) / wireguard / zram / bootstrap ==="
+
+# 强校验: 主题只剩 bootstrap (2026-10-08 需求)。
+#   =m 也算命中 —— m 照样编译, 只是不进镜像; 需求是"移除其余主题文件"。
+#   本 pin 的 immortalwrt/luci 里 themes/ 共 6 个, 逐个核对过:
+#     bootstrap / argon / footstrap / material / openwrt / openwrt-2020
+#   argon 在基线 configs/an7581.config:6397 是 =y, 靠 ponwrt-extra.config 的
+#   "is not set" 反向覆盖; 其余四个基线本就是 not set, 此处一并断言防回归。
+THEME_ON=""
+for t in luci-theme-argon luci-theme-footstrap luci-theme-material luci-theme-openwrt luci-theme-openwrt-2020 ; do
+  if grep -qE "^CONFIG_PACKAGE_${t}=(y|m)$" .config; then
+    THEME_ON="$THEME_ON $t"
+  fi
+done
+if [ -n "$THEME_ON" ]; then
+  echo "FATAL: 除 bootstrap 外还有主题被启用:$THEME_ON"
+  echo "       检查 ponwrt-extra.config 里的反向覆盖是否被别处又打开,"
+  echo "       以及是否有 feed 应用 DEPENDS 某个主题 (会经 select 顶回 =y)。"
+  grep -nE "^CONFIG_PACKAGE_luci-theme-" .config || true
+  err "FATAL: 除 bootstrap 外还有主题被启用:$THEME_ON${NL}$(grep -nE '^CONFIG_PACKAGE_luci-theme-' .config || true)"
+  exit 1
+fi
+echo "=== 主题已收窄: 仅 bootstrap (argon/footstrap/material/openwrt/openwrt-2020 全部关闭) ==="
 
 # 强校验: 明确砍掉的包不许复活 (2026-10-06 编译耗时优化)。
 #

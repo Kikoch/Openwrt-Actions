@@ -23,7 +23,12 @@
 ### 1. Build PonWrt XG-040G-MD
 
 - **产物**: `ponwrt-airoha-an7581-nokia_xg-040g-md-ubi-*-sysupgrade.itb`（+ `-initramfs-recovery.itb`）
-- **内置**: 中文 LuCI（bootstrap 主题）、OpenClash、DDNS（含 dnspod）、attendedsysupgrade、package-manager、WireGuard、BBR、nft-fullcone、zram-swap、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
+- **内置**: 中文 LuCI（**仅 bootstrap 主题**，argon/footstrap/material/openwrt/openwrt-2020 全部移除）、OpenClash、DDNS（luci-app-ddns + ddns-scripts-dnspod，含 `luci-i18n-ddns-zh-cn`）、attendedsysupgrade、package-manager、WireGuard（luci-proto-wireguard + wireguard-tools + kmod-wireguard/udptunnel4/6）、BBR、nft-fullcone、zram-swap、USB3 存储、adblock-fast 及依赖（gawk/grep/sed/coreutils-sort）
+- **2026-10-08 需求项核对（组件 / 中文翻译 / 内核）**: 逐条核实后只有一处真缺 —— `luci-i18n-ddns-zh-cn`（已补）。其余三处是上游现状，不是遗漏：
+  - `luci-app-openclash`：**上游没有 `luci-i18n-openclash-zh-cn` 这个包**。其 Makefile 不走 luci.mk 的 i18n 机制，而是在 `Build/Prepare` 里用 `po2lmo` 把 `po/zh-cn/openclash.zh-cn.po` 编进包体。中文天然自带。
+  - `luci-proto-wireguard`：该 feed 里**没有 `po/` 目录**，luci.mk 只对存在 `po/<lang>/` 的包生成 i18n 包 → 不存在 `luci-i18n-wireguard-zh-cn`。该页面为英文，属上游现状。
+  - `zram-swap` + `kmod-zram`：**没有 LuCI 应用**（无 luci-app-zram），走 `/etc/config/zram` + `/etc/init.d/zram-swap`，无界面也就无翻译包。
+  - 三道校验闭环：`ponwrt-extra.config` 反向覆盖 → `ponwrt-diy-part2.sh` 配置层断言（新增"除 bootstrap 外主题一律不许 =y/=m"+"12 个需求包全部 =y"）→ workflow `FORBID_PKGS` 产物层反向校验（5 个主题出现在 manifest 即判失败）。
 - **OpenClash 和 luci feed 的 pin 必须成对看**: OpenClash 用的是 `immortalwrt/luci` 自带的 `applications/luci-app-openclash`（0.47.156，与上游 vernesong/OpenClash 的 tag 同版）。但 **2026-09 那段时间 immortalwrt/luci 的 master 线把这批第三方 LuCI 应用整段拆走了，2026-10-02 的 `Merge Official Source`(ed0441b1) 才合回**（applications 从 103 → 167 项）；pin 在 `f4f91aee`(9/23) 时 ap 里根本没有 openclash —— 只在 `ponwrt-extra.config` 写 `=y` 的话，`make defconfig` 会当未知符号静默删掉，编译成功、固件里一个字节都没有（run #16 教训）。所以 luci pin 固定在 `ed0441b1`，这是本线唯一一个故意晚于源码 pin 日期的 feed
 - **zram 保留说明**: 18.1 那台是 1G 版用不上，但内存更小的同型号设备需要 zram 做 OOM 兜底；内核一变外部 apk 源就没有配套 `kmod-zram`，只能编进固件，所以默认带上（不需要时注释 `ponwrt-extra.config` 里那 5 行，并同步注释 `ponwrt-required-packages.txt` 里的 2 行，否则产物校验会失败）
 - **2026-10-03 对齐 18.1 路由器**: 新增 luci-app-iptv（在 `pbs05/openwrt-pon-userspace` 里，早期误判为不可复刻）、ruby + ruby-yaml（OpenClash 依赖）、shellsync + kmod-macvlan、luci-mod-admin-full、luci-lib-uqr、autocore、coreutils-nohup、yq、kmod-mppe；移除 qrencode、luci-app-upnp、kmod-usb-xhci-mtk
