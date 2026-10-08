@@ -7,6 +7,9 @@
 #   与本地 diy-part1 的 lan1 修复同值 -> diy-part1 已做成幂等)。
 #   历史已知良好版本: 5651948f9d (2026-09-25, usb-sfp 重构前)。
 # feeds 同步 pin 到同期提交，保证可复现
+# 包组成 2026-10-08: 恢复 IPTV (luci-app-iptv + luci-i18n-iptv-zh-cn),
+#   移除 adblock 全家 (luci-app-adblock-fast / adblock-fast /
+#   luci-i18n-adblock-fast-zh-cn + gawk/grep/sed/coreutils-sort)
 # 编译后执行 scripts/verify-firmware.sh 做产物层校验
 #=================================================
 
@@ -223,7 +226,7 @@ jobs:
         FATALS="$(grep -aE '^FATAL' "$LOG" | sort -u || true)"
         [ -n "$FATALS" ] && echo "::error::$(esc "配置阶段失败原因:${NL}${FATALS}")"
         # 无论哪条断言炸, 都把相关符号的**真实值**一并报出来 —— 免得再来一轮
-        EV="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL' .config | sort -u || true)"
+        EV="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|adblock|kmod-mppe|ovpn-backports|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL' .config | sort -u || true)"
         echo "::error::$(esc "defconfig 之后的相关符号实况:${NL}${EV}")"
         echo "::error::$(esc "脚本末尾 30 行:${NL}$(tail -30 "$LOG")")"
         exit 1
@@ -337,9 +340,19 @@ jobs:
         REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
         # 官方 configs/release.config 自带 luci-app-upnp, 已在 extra.config 里
         # 反向覆盖; 这里在产物层再卡一道, 防止依赖链把它 select 回来。
-        # 后半段是 2026-10-06 砍掉的包 —— **只能列真的砍得掉的**:
-        #   luci-app-iptv(+i18n) 无人 select; kmod-ovpn-backports 的上游 select 源
-        #   (openvpn) 未启用。两者实测已成功关闭。
+        #
+        # 中段是"明确砍掉"的包 —— **只能列真的砍得掉的** (基线 not set 且无人 select):
+        #   adblock-fast 全家: luci-app-adblock-fast / adblock-fast /
+        #     luci-i18n-adblock-fast-zh-cn, 外加当年为它加的四个推荐组件
+        #     gawk / grep / sed / coreutils-sort。判据: 这七个符号在
+        #     configs/an7581.config 里全是 "is not set", 唯一打开它们的是本仓
+        #     ponwrt-extra.config; awk/grep/sed/sort 在 adblock-fast/Makefile 里是
+        #     `+!BUSYBOX_DEFAULT_xxx:` 条件依赖, busybox 自带时本来就不拉。
+        #     2026-10-08 按需求移除。
+        #   kmod-ovpn-backports: 上游 select 源 (openvpn) 未启用。
+        #   (luci-app-iptv(+i18n) 原本也在这段 —— 2026-10-08 按需求改回"要",
+        #    已移出本表并进入 diy-part2 的"指定包含"断言与 required-packages.txt。
+        #    ⚠️ 同一符号不许同时出现在 require 与 forbid 两处。)
         #   注意**不要**把 shellsync / kmod-macvlan / kmod-mppe 放进来:
         #   它们是 ppp 的硬依赖 (Package/ppp DEPENDS:= ... +shellsync +kmod-mppe,
         #   Package/shellsync 又依赖 +kmod-macvlan), 而 ppp 在
@@ -350,7 +363,7 @@ jobs:
         #   ponwrt-extra.config 反向覆盖 + ponwrt-diy-part2.sh 硬断言,
         #   这里做产物层第三道 —— 主题包是真的会进 manifest 的,
         #   任何一路被 select 顶回来都会在这里判死。
-        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports luci-theme-argon luci-theme-footstrap luci-theme-material luci-theme-openwrt luci-theme-openwrt-2020"
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports luci-theme-argon luci-theme-footstrap luci-theme-material luci-theme-openwrt luci-theme-openwrt-2020"
         SOURCE_URL: ${{ env.REPO_URL }}
         SOURCE_REF: ${{ env.SOURCE_REF }}
       run: bash scripts/verify-ponwrt.sh

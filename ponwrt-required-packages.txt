@@ -32,6 +32,14 @@ kmod-zram
 #            现在 diy-part2 有编译前校验, 这里再做一道产物层校验, 双重保险。
 luci-app-openclash
 
+# IPTV (2026-10-08 需求): 恢复 luci-app-iptv + 中文包。
+#   包来自 pon_userspace feed 的 luci-app-iptv/ (pin cce9d756, 已按 ref 核对);
+#   前端一开, luci.mk 会由 po/zh_Hans/iptv.po 生成 luci-i18n-iptv-zh-cn。
+#   两条都列 —— 同 openclash 的教训: .config 里写 =y 不代表产物里就有。
+#   正常生效时页面在 LuCI「网络 → IPTV」; 出厂 enabled='0', 要手动勾"启用"。
+luci-app-iptv
+luci-i18n-iptv-zh-cn
+
 # 2026-10-08 需求项 (OpenClash / WireGuard / DDNS(dnspod) / zram / bootstrap 主题)
 # 在 manifest 层再确认一次 —— diy-part2 只保证 .config 里 =y,
 # 产物里到底有没有得看这里。

@@ -63,7 +63,7 @@ make defconfig
 # 一条硬断言 (ppp 那三个包就是教训) —— 关没关掉看注解即可。
 # 2026-10-06 追加: WiFi 全家桶 / 冗余 PHY / hwmon / i2c-core 同样只观测,
 #   因为 feeds 里的 luci-app-* 有可能 DEPENDS wpad 把它们 select 回来。
-SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|kmod-mppe|ovpn-backports|libi2c|i2c-tools|i2c-core|hwmon-core|mt76|mt791|cfg80211|mac80211|PACKAGE_wpad|PACKAGE_hostapd|wireless-regdb|wifi-scripts|nl80211|PACKAGE_iw=|zn515|phy-realtek|phy-maxlinear|rtl826x|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG|luci-theme|luci-i18n-ddns|luci-proto-wireguard|PACKAGE_zram|PACKAGE_kmod-zram|udptunnel|PACKAGE_luci-compat|nft-tproxy|inet-diag' .config | sort -u || true)"
+SYMS="$(grep -aE 'shellsync|kmod-macvlan|luci-app-iptv|iptv-zh-cn|adblock|kmod-mppe|ovpn-backports|libi2c|i2c-tools|i2c-core|hwmon-core|mt76|mt791|cfg80211|mac80211|PACKAGE_wpad|PACKAGE_hostapd|wireless-regdb|wifi-scripts|nl80211|PACKAGE_iw=|zn515|phy-realtek|phy-maxlinear|rtl826x|KERNEL_DEBUG|CCACHE|CONFIG_DEVEL|COLLECT_KERNEL_DEBUG|luci-theme|luci-i18n-ddns|luci-proto-wireguard|PACKAGE_zram|PACKAGE_kmod-zram|udptunnel|PACKAGE_luci-compat|nft-tproxy|inet-diag' .config | sort -u || true)"
 echo "::warning::$(esc "defconfig 之后的相关符号实况:${NL}${SYMS}")"
 
 # 早失败: MULTI_PROFILE 若还开着, 后面会白编两个多小时, 而且编译步骤
@@ -106,6 +106,8 @@ echo "=== 关键驱动校验通过 ==="
 #
 # 2026-10-08 扩表: 把 "OpenClash / WireGuard / DDNS(dnspod) / zram / bootstrap 主题"
 #   这组需求项全部纳入断言 (本体 + 中文翻译 + 内核依赖)。
+#   同日第二处变更: IPTV 由"砍"改回"要" -> luci-app-iptv(+i18n) 进入本表,
+#   adblock-fast 全家从本表移出 (改入下方 FORBID 表)。
 #   注意这里**只放已核实存在于本 pin feed 里的符号** —— 放错一个 (比如上游没有
 #   的 luci-i18n-openclash-zh-cn / luci-i18n-wireguard-zh-cn) 就会把好构建判死:
 #     luci-app-openclash      luci feed applications/ (自带 po/zh-cn, 中文在包体内)
@@ -113,7 +115,9 @@ echo "=== 关键驱动校验通过 ==="
 #     luci-proto-wireguard    luci feed protocols/ (无 po/, 故无 i18n 包)
 #     ddns-scripts-dnspod     packages feed, luci-app-ddns 的后端脚本
 #     zram-swap / kmod-zram   packages feed, 无 LuCI 页面故无 i18n
-for pkg in luci-app-openclash luci-app-adblock-fast \
+#     luci-app-iptv(+i18n)    pon_userspace feed 的 luci-app-iptv/ (pin cce9d756,
+#                             有 po/zh_Hans/iptv.po -> 生成 luci-i18n-iptv-zh-cn)
+for pkg in luci-app-openclash luci-app-iptv luci-i18n-iptv-zh-cn \
            luci-app-ddns luci-i18n-ddns-zh-cn ddns-scripts-dnspod \
            luci-proto-wireguard wireguard-tools kmod-wireguard \
            kmod-udptunnel4 kmod-udptunnel6 \
@@ -127,7 +131,7 @@ for pkg in luci-app-openclash luci-app-adblock-fast \
     exit 1
   fi
 done
-echo "=== 指定包含的包全部命中: openclash / adblock-fast / ddns(+zh-cn) / wireguard / zram / bootstrap ==="
+echo "=== 指定包含的包全部命中: openclash / iptv(+zh-cn) / ddns(+zh-cn) / wireguard / zram / bootstrap ==="
 
 # 强校验: 主题只剩 bootstrap (2026-10-08 需求)。
 #   =m 也算命中 —— m 照样编译, 只是不进镜像; 需求是"移除其余主题文件"。
@@ -170,10 +174,19 @@ echo "=== 主题已收窄: 仅 bootstrap (argon/footstrap/material/openwrt/openw
 #   要真关掉只能改 ppp 的 Makefile —— 那等于砍掉 PPPoE 的 MPPE 加密与多拨同步, 不做。
 #   收益本就以秒计 (shellsync 是单个 .c, 两个各一个 .ko), 不值得为它动核心包。
 #
-#   luci-app-iptv(+i18n) / kmod-ovpn-backports 则确实无人 select (iptv 只被本仓 extra.config 打开;
-#   kmod-ovpn-backports 的上游 select 源是 openvpn, 而 openvpn 未启用) —— 实测已成功关闭。
-FORBID_PKG_LIST="luci-app-iptv luci-i18n-iptv-zh-cn kmod-ovpn-backports"
-FORBID_PKG_RE="luci-app-iptv|luci-i18n-iptv-zh-cn|kmod-ovpn-backports"
+#   kmod-ovpn-backports 的上游 select 源是 openvpn, 而 openvpn 未启用 -> 确实无人 select。
+#
+#   2026-10-08 变更 —— iptv 从本表**移出**(改回"要", 见上方"指定包含"表),
+#   adblock-fast 全家进来:
+#     luci-app-adblock-fast / adblock-fast / luci-i18n-adblock-fast-zh-cn
+#     外加当年为它加、现已无用的四个推荐组件 gawk / grep / sed / coreutils-sort
+#   判据: 这七个符号在基线 an7581.config 里全是 "is not set", 唯一打开它们的是本仓
+#   extra.config (连同 18.1 对齐时加的那四个); 其中 awk/grep/sed/sort 在
+#   adblock-fast/Makefile 里是 `+!BUSYBOX_DEFAULT_AWK:gawk` 形式的**条件**依赖 ——
+#   busybox 自带时根本不会拉。撤回 =y 之后无人 select -> 关得掉。
+#   ⚠️ 两张表必须互斥: 同一符号同时出现在 require 与 forbid 里会让构建必然失败。
+FORBID_PKG_LIST="luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports"
+FORBID_PKG_RE="luci-app-adblock-fast|luci-i18n-adblock-fast-zh-cn|adblock-fast|gawk|grep|sed|coreutils-sort|kmod-ovpn-backports"
 HIT=""
 for pkg in $FORBID_PKG_LIST; do
   if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
@@ -187,7 +200,7 @@ if [ -n "$HIT" ]; then
   err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E "^CONFIG_PACKAGE_(${FORBID_PKG_RE})=" .config || true)"
   exit 1
 fi
-echo "=== 已砍包确认全部关闭: luci-app-iptv(+i18n) / kmod-ovpn-backports ==="
+echo "=== 已砍包确认全部关闭: adblock-fast 全家(前端/后端/中文 + gawk/grep/sed/coreutils-sort) / kmod-ovpn-backports ==="
 echo "=== (shellsync / kmod-macvlan / kmod-mppe 是 ppp 的硬依赖, 保留, 见上方注释) ==="
 
 # 强校验: 内核与全部 kmod 不再产 DWARF 调试信息 (编译时间 + 磁盘)
