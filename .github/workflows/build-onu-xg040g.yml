@@ -1,0 +1,398 @@
+#=================================================
+# Build ONU 固件 (Nokia XG-040G-MD UBI)
+#
+# 源码: naoki66/ImmortalWrt-for-Gemtek-brightspeed (不是 pbs05/ponwrt)
+# 目的: 拿 naoki66 那套 ONU 用户态栈 —— 顶级 ONU 菜单 luci-app-onu
+#       (状态 / 硬件身份 / 认证 / 上网 / IPTV / 语音 / 诊断 七个子页)
+#
+# ⚠️ 这是**独立于 build-ponwrt-xg040g.yml 的新线**, 与它互不干扰:
+#      那条线 = pbs05/ponwrt + luci-app-pon + luci-app-iptv, 文件前缀 ponwrt-*
+#      这条线 = naoki66 fork + luci-app-onu,         文件前缀 onu-*
+#      两条线有自己的 dispatch type、concurrency group、缓存 key、artifact 名,
+#      改这条线的任何文件都不会触发那条线。
+#
+# 构建方法对齐 naoki66 官方 workflow (.github/workflows/build-firmware.yml):
+#   cp 2010.config .config -> set-build-version.sh -> make defconfig -> make
+# 并沿用本仓 ponwrt 线的包选择 (onu-extra.config) 与产物层校验
+# (scripts/verify-onu.sh -> verify-firmware.sh)。
+#
+# ⚠️ 不跑 scripts/check-gemtek-profile-isolation.sh:
+#   那个脚本只认 gemtek_xr1710g / gemtek_xg2010g, else 分支直接 exit 1。
+#   我们改成 nokia 设备后必然被它判死 —— 它是给 Gemtek 做 profile 隔离的。
+#=================================================
+
+name: Build ONU Firmware XG-040G-MD
+
+on:
+  # 必须带 types: 裸 repository_dispatch 会被任意 event_type 命中, 会把别的
+  # 线一起拉起来 (本仓 ponwrt 线用 build-ponwrt, 这条用 build-onu)。
+  repository_dispatch:
+    types: [build-onu]
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "naoki66 fork 源码 ref (留空=用默认 pin)"
+        required: false
+        default: ""
+      skip_verify:
+        description: "跳过产物层校验 (仅排障用, yes/no)"
+        required: false
+        default: "no"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+      release:
+        description: "是否创建 Release (yes/no)"
+        required: false
+        default: "no"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      # 只列本线专属文件 —— 共用实现 (scripts/verify-firmware.sh) 绝不进这里,
+      # 否则改一次校验会把 ponwrt 线和 TR3000 线一起拉起来 (paths 是 OR 语义)。
+      - "onu-extra.config"
+      - "onu-diy-part1.sh"
+      - "onu-diy-part2.sh"
+      - "onu-required-packages.txt"
+      # firewall4 补丁: 只被 onu-diy-part1.sh 引用 (ponwrt 线不引用),
+      # 所以放这里是安全的。它不在任何 include 链上, 漏了就永远触发不了构建。
+      - "patches/firewall4/010-fw4-zone-device-flowtable.patch"
+      - "scripts/verify-onu.sh"
+
+env:
+  REPO_URL: https://github.com/naoki66/ImmortalWrt-for-Gemtek-brightspeed
+  # 2026-10-09 HEAD: 8243d9a5 "build: add fw876/helloworld feed for ShadowSocksR Plus+"
+  # (比溯源过的 e29028481a 新; 该点已确认: 设备 nokia_xg-040g-md-ubi 在
+  #  an7581.mk:172, 2010.config 里 PON 全家桶全 =y, firewall4 仍是 b6e51575)
+  REPO_REF: 8243d9a5db5f0acdf8acbd8397076d3a7cabd78e
+  CONFIG_FILE: onu-extra.config
+  DIY_P1_SH: onu-diy-part1.sh
+  DIY_P2_SH: onu-diy-part2.sh
+  REQUIRED_PKGS: onu-required-packages.txt
+  # 产物层校验目标
+  EXPECT_PROFILE: nokia_xg-040g-md-ubi
+  EXPECT_BOARD: nokia,xg-040g-md-ubi
+  UPLOAD_FIRMWARE: true
+  TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  # 与 ponwrt 线的 group 名不同 (那边是 ponwrt-xg-), 两条线可以各跑各的,
+  # 不会互相 cancel。
+  group: onu-xg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ vars.ONU_RUNNER || 'ubuntu-24.04' }}
+    if: github.event.repository.owner.id == github.event.sender.id
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+
+    - name: Free build space
+      run: |
+        df -hT /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /usr/share/swift /opt/hostedtoolcache /usr/local/share/boost \
+                    /opt/az /usr/local/.ghcup
+        sudo apt-get clean
+        sudo docker image prune -af >/dev/null 2>&1 || true
+        df -hT /
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+          gettext git g++-multilib gcc-multilib gperf help2man intltool \
+          libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+          libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+          libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+          python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+          qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+          uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+        sudo timedatectl set-timezone "$TZ"
+        sudo mkdir -p /workdir
+        sudo chown $USER:$GROUPS /workdir
+
+    - name: Clone naoki66 fork (pinned)
+      working-directory: /workdir
+      run: |
+        REF="${{ github.event.inputs.source_ref }}"
+        [ -z "$REF" ] && REF="$REPO_REF"
+        echo "Building from: $REF"
+        git clone $REPO_URL openwrt
+        cd openwrt
+        git checkout -q $REF
+        echo "SOURCE_REF=$REF" >> $GITHUB_ENV
+        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Generate build version
+      # naoki66 的 scripts/set-build-version.sh 需要这几个环境变量。
+      # 它从 CONFIG_TARGET_PROFILE 推导设备型号写进 VERSION_DIST
+      # (onu-diy-part2.sh 已把 PROFILE 改成 DEVICE_nokia_xg-040g-md-ubi
+      #  -> 版本串为 "ImmortalWrt naoki66 NOKIA_XG-040G-MD")。
+      # 不 fetch upstream: 那只是给 build_id 多加一段, 没必要多跑一次网络。
+      working-directory: /workdir/openwrt
+      run: |
+        build_date=$(TZ=Asia/Shanghai date +'%Y%m%d')
+        repo_commit=$(git rev-parse --short=8 HEAD)
+        build_id="${build_date}-${repo_commit}"
+        echo "BUILD_DATE=$build_date" >> $GITHUB_ENV
+        echo "REPO_COMMIT=$repo_commit" >> $GITHUB_ENV
+        echo "UPSTREAM_COMMIT=$repo_commit" >> $GITHUB_ENV
+        echo "BUILD_ID=$build_id" >> $GITHUB_ENV
+        echo "VERSION_CODE=$build_id" >> $GITHUB_ENV
+        echo "版本: $build_id"
+
+    - name: Cache downloads (dl/)
+      # key 只用源码 ref: dl/ 里装的是源码 tarball, 内容由源码 pin 决定。
+      # 本 fork 的 feeds.conf.default 不 pin 提交 (全跟 HEAD 走), 所以 feeds
+      # 滚动时 dl/ 会 miss —— 这是跟随上游做法的代价, 可接受。
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/dl
+        key: onu-dl-${{ env.REPO_REF }}
+        restore-keys: |
+          onu-dl-
+
+    - name: Cache ccache
+      uses: actions/cache@v4
+      with:
+        path: /workdir/openwrt/.ccache
+        key: onu-ccache-${{ hashFiles('onu-extra.config', 'onu-diy-part1.sh', 'onu-diy-part2.sh') }}
+        restore-keys: |
+          onu-ccache-
+
+    - name: Run DIY part1 (自定义前置脚本)
+      run: |
+        chmod +x $DIY_P1_SH
+        cd openwrt
+        $GITHUB_WORKSPACE/$DIY_P1_SH
+
+    - name: Update feeds
+      # 本 fork 自带 feeds.conf.default, 其中 pon_userspace 天然指向
+      # naoki66/openwrt-pon-userspace(= OpenWrt_ONU_CONFIG, HEAD 77a2c09a,
+      # 两仓库内容 diff 为空) -> luci-app-onu 是原生包, 不需要换源。
+      run: |
+        cd openwrt
+        awk '!/^[[:space:]]*#/ && NF {print "  " $0}' feeds.conf.default
+        ./scripts/feeds update -a
+
+    - name: Install feeds
+      run: cd openwrt && ./scripts/feeds install -a
+
+    - name: Fix stale golang host + apply feed patches
+      # 这两步是 naoki66 官方 workflow 的做法, 照抄:
+      #   fix-stale-golang-host.sh  修 host 侧 go 工具链的陈旧缓存
+      #   apply-feed-patches.sh     把源码树 patches/feeds/<feed>/ 下的补丁
+      #                             用 git -C feeds/<feed> apply 打进 feed 仓库
+      #     ⚠️ 它**只管 feed**, 不管源码树内的包 —— 所以 firewall4 那个补丁
+      #        必须由 onu-diy-part1.sh 放进 package/.../patches/ 走 quilt。
+      run: |
+        cd openwrt
+        bash scripts/fix-stale-golang-host.sh
+        FEED_PATCHES_STRICT=1 bash scripts/apply-feed-patches.sh
+
+    - name: Load configuration
+      # 显式 shell: bash —— 既拿回 pipefail (默认 `bash -e {0}` 没有, 失败会被吞),
+      # 也才能在失败时把脚本输出抬成 ::error:: 注解 (公开仓库里唯一匿名可读的
+      # 诊断通道; 完整 job 日志要 admin 权限)。
+      shell: bash
+      run: |
+        if [ -e files ]; then mv files openwrt/files; fi
+        chmod +x $DIY_P2_SH
+        cd openwrt
+        LOG=/tmp/diy-part2.log
+        if "$GITHUB_WORKSPACE/$DIY_P2_SH" 2>&1 | tee "$LOG"; then
+          exit 0
+        fi
+        esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
+        NL=$'\n'
+        FATALS="$(grep -aE '^FATAL' "$LOG" | sort -u || true)"
+        [ -n "$FATALS" ] && echo "::error::$(esc "配置阶段失败原因:${NL}${FATALS}")"
+        EV="$(grep -aE 'luci-app-onu|onu-zh-cn|omcproxy|airoha-pon|kmod-airoha|luci-app-openclash|luci-theme|KERNEL_DEBUG_INFO|CCACHE|CONFIG_DEVEL|MULTI_PROFILE|TARGET_PROFILE' .config | sort -u || true)"
+        echo "::error::$(esc "defconfig 之后的相关符号实况:${NL}${EV}")"
+        echo "::error::$(esc "脚本末尾 30 行:${NL}$(tail -30 "$LOG")")"
+        exit 1
+
+    - name: Download package
+      id: package
+      run: |
+        cd openwrt
+        make download -j8
+        find dl -size -1024c -exec ls -l {} \;
+        find dl -size -1024c -exec rm -f {} \;
+
+    - name: Compile the firmware
+      id: compile
+      # 必须显式写 shell: bash —— Linux 上的默认 shell 是 `bash -e {0}`, 不含
+      # pipefail, 于是 `make … | tee` 的退出码等于 tee 的(恒 0), make 失败会被
+      # 判成 success。写明 shell: bash 才会加 -o pipefail。
+      shell: bash
+      env:
+        CCACHE_DIR: /workdir/openwrt/.ccache
+        CCACHE_MAXSIZE: 1500M
+        # ccache 默认 compiler_check=mtime: 每次重编出来的工具链 mtime 都不一样
+        # -> 全 miss。按内容比对, 跨构建才有机会命中。
+        CCACHE_COMPILERCHECK: content
+      run: |
+        cd openwrt
+        JOBS=$(( $(nproc) + 1 ))
+        echo "$(nproc) vCPU -> make -j$JOBS"
+        LOG=/tmp/openwrt-build.log
+        : > "$LOG"
+        ts() { date -u '+%H:%M:%S'; }
+        df -hT / | tail -1
+
+        rc=0
+        echo "### [$(ts)] make -j$JOBS 开始"
+        if make -j"$JOBS" 2>&1 | tee "$LOG"; then
+          echo "### [$(ts)] make 一次通过"
+        else
+          # 不做 `make -j1` 全树串行兜底 —— 那等于把剩下的活儿全部单核串行化,
+          # 失败点稍微靠前一点, 30 分钟就能变成 3 小时。改成: 从日志抓出失败的
+          # 包, 定点重编。
+          echo "### [$(ts)] make -j$JOBS 失败, 转入定点重编"
+          FAILED="$(grep -oE 'package/[^ ]+ failed to build' "$LOG" | sed 's/ failed to build//' | sort -u || true)"
+          if [ -z "$FAILED" ]; then
+            echo "### 日志里没抓到 'failed to build', 原样重试一次"
+            make -j"$JOBS" 2>&1 | tee -a "$LOG" || rc=$?
+          else
+            echo "### 失败包: $(printf '%s ' $FAILED)"
+            for p in $FAILED; do
+              echo "### [$(ts)] 定点重编 $p"
+              make "$p/compile" V=s -j1 2>&1 | tee -a "$LOG" \
+                || echo "### $p 定点重编未通过, 先跑完剩余目标再定论"
+            done
+            echo "### [$(ts)] 定点重编结束, 补完剩余目标"
+            make -j"$JOBS" 2>&1 | tee -a "$LOG" || rc=$?
+          fi
+        fi
+
+        if [ "$rc" -ne 0 ]; then
+          echo "### [$(ts)] 编译最终失败"
+          set +e
+          echo "===== 编译失败: 摘要 ====="
+          grep -E '^[[:space:]]*ERROR: package/.* failed to build' "$LOG" | sort -u | while IFS= read -r line; do
+            echo "::error::${line#*ERROR: }"
+          done
+          echo "===== 失败包附近的报错 (去重后至多 30 行) ====="
+          grep -nE '^[[:space:]]*ERROR: package/.* failed to build' "$LOG" | tail -1 | cut -d: -f1 | {
+            IFS= read -r ln && awk -v ln="$ln" 'NR>=ln-60 && NR<=ln' "$LOG"
+          } | grep -E 'Error [0-9]+|No such|No required|no required|failed|cannot find|Permission denied|go get |Patch failed' | sort -u | head -30
+          echo "===== 日志最后 150 行 ====="
+          tail -150 "$LOG"
+          exit 1
+        fi
+        echo "### [$(ts)] 编译完成"
+        df -hT / | tail -1
+        echo "--- ccache 统计 (cache hit 低就说明这套没在起作用) ---"
+        ccache -s 2>/dev/null || true
+        # DEVICE_NAME 必须是单行。多行写进 $GITHUB_ENV 会被 runner 拒绝
+        # ("Invalid format ...") 并直接把编译步骤判成失败。
+        DEVICE_LIST="$(grep '^CONFIG_TARGET.*DEVICE.*=y' .config 2>/dev/null | sed -r 's/.*DEVICE_(.*)=y/\1/' | sort -u || true)"
+        DEVICE_OUT=""
+        if printf '%s\n' "$DEVICE_LIST" | grep -qx '${{ env.EXPECT_PROFILE }}'; then
+          DEVICE_OUT='${{ env.EXPECT_PROFILE }}'
+        else
+          DEVICE_OUT="$(printf '%s\n' "$DEVICE_LIST" | head -1)"
+        fi
+        if [ -z "$DEVICE_OUT" ]; then
+          echo "::warning::.config 里没有 CONFIG_TARGET.*DEVICE.*=y, 退回 EXPECT_PROFILE"
+          DEVICE_OUT='${{ env.EXPECT_PROFILE }}'
+        fi
+        echo "构建设备: $DEVICE_OUT (全部命中: $(printf '%s' "$DEVICE_LIST" | tr '\n' ' '))"
+        echo "DEVICE_NAME=$DEVICE_OUT" >> $GITHUB_ENV
+        echo "FILE_DATE=$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: Verify firmware (产物层校验 + 归档)
+      id: verify
+      if: github.event.inputs.skip_verify != 'yes'
+      env:
+        SRC_DIR: openwrt
+        EXPECT_PROFILE: ${{ env.EXPECT_PROFILE }}
+        EXPECT_BOARD: ${{ env.EXPECT_BOARD }}
+        REQUIRED_PKGS: ${{ env.REQUIRED_PKGS }}
+        # 产物层反向校验: 这些包出现在 manifest 里即判失败。
+        #   只列真砍得掉的 —— 不要把 ppp 的硬依赖 (shellsync / kmod-macvlan /
+        #   kmod-mppe) 放进来, select 压过 is not set, 放了必然判死。
+        #   upnp 全家: 基线 2010.config 与 configs/release.config 都是 =y,
+        #             靠 onu-extra.config 反向覆盖, 这里第三道。
+        #   argon 等主题: 需求是"只留 bootstrap"。
+        FORBID_PKGS: "luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables luci-theme-argon luci-theme-footstrap luci-theme-material luci-theme-openwrt luci-theme-openwrt-2020 luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast"
+        SOURCE_URL: ${{ env.REPO_URL }}
+        SOURCE_REF: ${{ env.SOURCE_REF }}
+      run: bash scripts/verify-onu.sh
+
+    - name: Check space usage
+      if: (!cancelled())
+      run: df -hT
+
+    - name: Organize files
+      id: organize
+      # 必须挂 compile 成功: 只用 !cancelled() 的话, 前面失败后这步照样跑,
+      # cd 进不存在的产物目录 -> 再报一个 exit 1, 把真正的失败原因埋掉
+      if: env.UPLOAD_FIRMWARE == 'true' && steps.compile.outcome == 'success' && !cancelled()
+      run: |
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@v5
+      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled() && (github.event.inputs.skip_verify == 'yes' || steps.verify.outcome == 'success')
+      with:
+        name: ONU_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+
+    - name: Create release
+      if: github.event.inputs.release == 'yes' && !cancelled() && (github.event.inputs.skip_verify == 'yes' || steps.verify.outcome == 'success')
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ONU_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        files: ${{ env.FIRMWARE }}/*
+        body: |
+          ONU 固件 - Nokia XG-040G-MD (UBI)
+          源码: naoki66/ImmortalWrt-for-Gemtek-brightspeed @ ${{ env.SOURCE_REF }}
+          种子配置: 2010.config (XG2010G) + 设备切换为 nokia_xg-040g-md-ubi
+          编译时间: ${{ env.FILE_DATE }}
+
+          含 PON 全栈 + 顶级 ONU 菜单 (luci-app-onu: 状态/硬件身份/认证/上网/IPTV/语音/诊断)
+          已含修复: lan1(2.5G) EN8811H 复位时序 1s/100ms -> 10ms/20ms
+                    firewall4 zone.device flowtable (PPPoE 硬件卸载)
+          已通过产物校验: profile ${{ env.EXPECT_PROFILE }} / 板名 ${{ env.EXPECT_BOARD }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Delete old workflow runs
+      uses: Mattraks/delete-workflow-runs@v2
+      with:
+        token: ${{ github.token }}
+        repository: ${{ github.repository }}
+        retain_days: 7
+        keep_minimum_runs: 3
+
+    - name: Remove old Releases
+      uses: dev-drprasad/delete-older-releases@v0.3.4
+      if: github.event.inputs.release == 'yes' && !cancelled()
+      with:
+        keep_latest: 3
+        delete_tags: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

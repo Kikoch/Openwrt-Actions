@@ -18,6 +18,46 @@
 
 > 原「Build ImmortalWrt XG-040G-MD（实验）」线已删除：上游 master 滚动快，
 > ponwrt DTS / 内核补丁覆盖需要持续 rebase，维护成本高于收益。
+
+## ONU 线（2026-10-09 新增，与第 1 条并行，互不干扰）
+
+| # | Workflow | 设备 / SoC | 源码 | 状态 |
+|---|----------|-----------|------|------|
+| 3 | `build-onu-xg040g.yml` | Nokia XG-040G-MD (UBI) / Airoha AN7581 | [naoki66/ImmortalWrt-for-Gemtek-brightspeed](https://github.com/naoki66/ImmortalWrt-for-Gemtek-brightspeed) pin `8243d9a5` | **新线**，拿 naoki66 那套 ONU 用户态栈 |
+
+**为什么单独开一条线而不是改第 1 条**：换源码树（不是换 feed）会让第 1 条的
+pin、feeds、配置基线全部作废，等于把一条已跑通的线推倒重来。现在两条线并存：
+
+| | 第 1 条（ponwrt-*） | 第 3 条（onu-*） |
+|---|---|---|
+| 源码 | `pbs05/ponwrt` | `naoki66/ImmortalWrt-for-Gemtek-brightspeed` |
+| PON 用户态 | `pbs05/openwrt-pon-userspace` | `naoki66/openwrt-pon-userspace`（= 用户给的 `OpenWrt_ONU_CONFIG`，两仓库内容 diff 为空、HEAD 同为 `77a2c09a`） |
+| LuCI 页面 | `luci-app-pon` + `luci-app-iptv` | **`luci-app-onu`**（顶级 ONU 菜单，七页：状态/硬件身份/认证/上网/IPTV/语音/诊断） |
+| 配置合并 | `kconfig.pl` + `configs/an7581.config` + `configs/release.config` | `cp 2010.config .config` + `set-build-version.sh`（该 fork 的官方做法） |
+| dispatch type | `build-ponwrt` | **`build-onu`** |
+| 缓存 key | `ponwrt-dl-` / `ponwrt-ccache-` | **`onu-dl-` / `onu-ccache-`** |
+| artifact | `PonWrt_firmware_*` | **`ONU_firmware_*`** |
+
+文件前缀 `onu-*`（`onu-extra.config` / `onu-diy-part1.sh` / `onu-diy-part2.sh` /
+`onu-required-packages.txt` / `scripts/verify-onu.sh`），**第 1 条线的文件一个字没动**。
+
+三个值得记的核对结论：
+
+1. **种子配置选 `2010.config` 而不是 `1710.config`** —— `1710.config`（XR1710G）里
+   **没有 PON 包**。naoki66 自己那份 XG-040G-MD 固件是拿 1710.config 手工改设备 +
+   追加 PON 全家桶编出来的（私有定制，仓库里没有对应 config）。`2010.config` 里
+   PON 全家桶全是 `=y`，且 `MULTI_PROFILE` 已经是 not set，改设备即可。
+2. **不跑 `scripts/check-gemtek-profile-isolation.sh`** —— 它只认 `gemtek_xr1710g` /
+   `gemtek_xg2010g`，else 分支是 `unsupported Gemtek profile` + `exit 1`。改成 nokia
+   设备后必然被判死，它是给 Gemtek 做 profile 隔离用的，与本线无关。
+3. **firewall4 补丁不会被 `apply-feed-patches.sh` 应用** —— 那个脚本只处理源码树的
+   `patches/feeds/<feed>/`（用 `git -C feeds/<feed> apply`），而 firewall4 是源码树内的
+   包。所以由 `onu-diy-part1.sh` 塞进 `package/.../firewall4/patches/` 走 quilt。
+   本 fork 的 firewall4 是同一个提交 `b6e51575`，那份 rebase 补丁实测可直接复用。
+
+本线额外带上第 1 条线没有的两个修复：**lan1(2.5G) EN8811H 复位时序**
+（本 fork 实测仍是 `1s/100ms`，未合入上游修复 → 改成 `10ms/20ms`）与
+**firewall4 zone.device flowtable**（PPPoE 底下那层进 flowtable，硬件卸载才生效）。
 > 需要恢复可 `git revert` 删除提交。
 
 ### 1. Build PonWrt XG-040G-MD

@@ -1,0 +1,81 @@
+From 0c1ac09a05d4a49abd39e473c1e25437ca221ae8 Mon Sep 17 00:00:00 2001
+From: naoki66 <naoki66@local>
+Date: Sun, 4 Oct 2026 20:31:12 +0800
+Subject: [PATCH] fw4: resolve flowtable devices from zone device list too
+
+related_physdevs only mirrors interfaces referenced via zone network options; devices listed via zone device land solely in match_devices and never reach the flowtable. For a PPPoE session terminating locally (l3_device pppoe-wan, devtype ppp which resolve_lower_devices does not recurse into), the underlying 802.1q uplink and its physical device can therefore never be offloaded. Add zone_offload_devices() to collect concrete zone.device entries (skipping wildcard, inverted and any entries) and feed them through both the hardware and software offload resolution loops, reusing resolve_lower_devices so vlan/bridge lowers are expanded the same way.
+
+[OpenWrt-Actions 2026-10-09] 本补丁已相对上游版本 rebase:
+  上游原版基于未打本地补丁的 firewall4 b6e51575 (2025-03-17), hunk 1 的尾部
+  上下文是 "空行 + return {"。而 PonWrt 自带
+  001-firewall4-add-support-for-fullcone-nat.patch 在 nft_try_hw_offload 之后
+  插入了 nft_try_fullcone(), 正好落在该上下文中间 -> 原版直接打不上
+  (实测: "patch does not apply" at fw4.uc:489)。
+  这里的 rebase 只是把 zone_offload_devices() 挪到 nft_try_fullcone 之后、
+  "return {" 之前, 三处逻辑改动与上游逐字一致, 没有动语义。
+  应用顺序由文件名决定: 001-* 两个本地补丁先打, 010-* 最后打。
+
+原始来源: https://github.com/naoki66/OpenWrt_ONU_CONFIG
+  patches/firewall4/010-fw4-zone-device-flowtable.patch
+---
+ root/usr/share/ucode/fw4.uc | 33 ++++++++++++++++++++++++++++++----
+ 1 file changed, 27 insertions(+), 6 deletions(-)
+
+diff --git a/root/usr/share/ucode/fw4.uc b/root/usr/share/ucode/fw4.uc
+--- a/root/usr/share/ucode/fw4.uc
++++ b/root/usr/share/ucode/fw4.uc
+@@ -511,6 +511,20 @@ function nft_try_fullcone() {
+ }
+ 
+ 
++function zone_offload_devices(zone) {
++	let devices = [];
++
++	for (let entry in to_array(zone.device)) {
++		if (type(entry) != "object" || entry.any || entry.invert)
++			continue;
++
++		if (entry.device != null && index(entry.device, "+") < 0)
++			push(devices, entry.device);
++	}
++
++	return devices;
++}
++
+ return {
+ 	read_kernel_version: function() {
+ 		let fd = fs.open("/proc/version", "r"),
+@@ -539,10 +553,14 @@ return {
+ 			bus.disconnect();
+ 		}
+ 
+-		for (let zone in this.zones())
++		for (let zone in this.zones()) {
+ 			for (let device in zone.related_physdevs)
+ 				push(devices ||= [], ...resolve_lower_devices(devstatus, device));
+ 
++			for (let device in zone_offload_devices(zone))
++				push(devices ||= [], ...resolve_lower_devices(devstatus, device));
++		}
++
+ 		if (!devices)
+ 			return null;
+ 
+@@ -567,11 +585,16 @@ return {
+ 		if (!devices) {
+ 			devices = [];
+ 
+-			for (let zone in this.zones())
++			for (let zone in this.zones()) {
+ 				for (let device in zone.related_physdevs)
+ 					if (fs.access(`/sys/class/net/${device}`))
+ 						push(devices, device);
+ 
++				for (let device in zone_offload_devices(zone))
++					if (fs.access(`/sys/class/net/${device}`))
++						push(devices, device);
++			}
++
+ 			devices = sort(uniq(devices));
+ 		}
+ 

@@ -1,0 +1,49 @@
+# ONU 编译线 (naoki66 fork + luci-app-onu) 的关键包清单 —— 产物层校验用
+# 这些包必须出现在固件的 *.manifest 里, 否则 scripts/verify-onu.sh 判定失败,
+# 不上传 artifact、不发布 Release。
+#
+# 只列"缺了就废"的包。不要往这里塞可选包 —— 那会让校验变成噪音。
+#
+# ⚠️ 与 ponwrt-required-packages.txt 的差异:
+#     那条线是 luci-app-pon + luci-app-iptv; 本线是 luci-app-onu
+#     (IPTV 页被吸收进 ONU 菜单, 独立包不存在)。
+
+# PON 全栈 (光口失效 = 这台机器失去意义)
+kmod-airoha-en7572
+kmod-airoha-xpon
+kmod-airoha-pon-frontend
+airoha-ponctl
+airoha-pond
+luci-app-onu
+luci-i18n-onu-zh-cn
+# omcproxy: luci-app-onu 的硬依赖, 基线没开、靠 extra.config 补。
+#   它不在 manifest 里 -> 说明 luci-app-onu 被 defconfig 顶掉了。
+omcproxy
+
+# 2.5G LAN PHY
+kmod-phy-airoha-en8811h
+airoha-en8811h-firmware
+
+# NPU 固件 (对齐昨日产物 ponwrt-required-packages.txt)
+airoha-en7581-npu-firmware
+
+# zram: 小内存设备 OOM 兜底。
+# 内核版本一变, 外部 apk 源里就没有配套的 kmod-zram, 只能随固件编。
+# 若在 onu-extra.config 里注释掉 zram 的包, 必须同时注释掉这两行。
+zram-swap
+kmod-zram
+
+# 用户指定必须包含的 LuCI 应用
+luci-app-openclash
+
+# DDNS
+luci-app-ddns
+luci-i18n-ddns-zh-cn
+ddns-scripts-dnspod
+
+# WireGuard
+luci-proto-wireguard
+wireguard-tools
+
+# 主题
+luci-theme-bootstrap
