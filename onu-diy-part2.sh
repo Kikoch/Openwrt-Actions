@@ -64,7 +64,9 @@ EOF
 [ -e "$GITHUB_WORKSPACE/$CONFIG_FILE" ] && cat "$GITHUB_WORKSPACE/$CONFIG_FILE" >> .config
 
 # 4. 版本串（该 fork 自带; 环境变量由 workflow 提供, 缺失时用兜底值）
-if [ -x scripts/set-build-version.sh ]; then
+# ⚠️ 判存用 -f 不用 -x: 该脚本在 git 里是 100644 (没有可执行位),
+#    `-x` 恒为假 -> run #1 里直接走了"不存在"分支, 版本串没写进 .config。
+if [ -f scripts/set-build-version.sh ]; then
   BUILD_DATE="${BUILD_DATE:-$(date +%Y%m%d)}" \
   BUILD_ID="${BUILD_ID:-${BUILD_DATE:-$(date +%Y%m%d)}-local}" \
   REPO_COMMIT="${REPO_COMMIT:-local}" \
@@ -165,13 +167,17 @@ echo "=== 昨日对齐的需求包全部命中 (openclash / ruby / ddns / wiregu
 # 强校验 4: 已砍掉的包不许复活
 #   upnp:   configs/release.config 自带 CONFIG_PACKAGE_luci-app-upnp=y,
 #           2010.config 里也是 =y -> 必须反向覆盖。
-#   argon:  2010.config:6397 附近是 =y -> 需求是"只留 bootstrap"。
+#   argon:  2010.config:5358 是 =y -> 需求是"只留 bootstrap"。
+#   argon-config: 2010.config:5173/5437 是 =y, 且它 LUCI_DEPENDS:=+luci-theme-argon
+#           -> kconfig 里是 select PACKAGE_luci-theme-argon, 会把主题强行拉回。
+#           **必须连它一起关**, 否则 argon 永远关不掉 (run #1 的死法)。
 #   adblock: 本线基线本来就没开, 这里写上是防回归。
 #   ⚠️ 只列真砍得掉的 —— 不要塞 ppp 的硬依赖 (shellsync / kmod-macvlan /
 #      kmod-mppe), select 压过 is not set, 写了必然判死 (ponwrt 线 run #26 教训)。
 # ---------------------------------------------------------------
 HIT=""
 for pkg in luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptables \
+           luci-app-argon-config luci-i18n-argon-config-zh-cn \
            luci-theme-argon luci-theme-footstrap luci-theme-material \
            luci-theme-openwrt luci-theme-openwrt-2020 \
            luci-app-adblock-fast adblock-fast luci-i18n-adblock-fast-zh-cn ; do
@@ -180,10 +186,24 @@ for pkg in luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptab
   fi
 done
 if [ -n "$HIT" ]; then
-  err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E '^CONFIG_PACKAGE_(luci-app-upnp|luci-theme-|adblock)' .config || true)"
+  # 诊断: 谁 select 了它? select 压过 "# ... is not set", 只看 .config 看不出来,
+  # 从 make defconfig 生成的 tmp/.config-package.in 里反查"哪个 config 块里
+  # 写着 select PACKAGE_<pkg>", 并且只报告当前确实 =y/=m 的那些(真凶)。
+  WHY=""
+  for p in $HIT; do
+    OWN="$(awk -v pkg="PACKAGE_${p}" '/^config /{cfg=$2} $1=="select" && $2==pkg {print cfg}' \
+            tmp/.config-package.in 2>/dev/null | sort -u || true)"
+    for o in $OWN; do
+      if grep -qE "^${o}=[ym]" .config; then
+        WHY="$WHY${NL}  ${p} <- ${o#CONFIG_} (=y, select 强制拉起)"
+      fi
+    done
+  done
+  [ -n "$WHY" ] && WHY="${NL}被 select 强制拉起的关系:${WHY}"
+  err "FATAL: 已砍掉的包又冒出来了:$HIT${WHY}${NL}$(grep -E '^CONFIG_PACKAGE_(luci-app-upnp|luci-theme-|adblock|argon)' .config || true)"
   exit 1
 fi
-echo "=== 已砍包确认关闭: upnp 全家 / argon 等 5 个主题 / adblock 全家 ==="
+echo "=== 已砍包确认关闭: upnp 全家 / argon-config / argon 等 5 个主题 / adblock 全家 ==="
 
 # ---------------------------------------------------------------
 # 强校验 5: 内核与 kmod 不带 DWARF 调试信息 + ccache 真的开着
