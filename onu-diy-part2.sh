@@ -180,7 +180,19 @@ for pkg in luci-app-upnp luci-i18n-upnp-zh-cn miniupnpd-nftables miniupnpd-iptab
            luci-app-argon-config luci-i18n-argon-config-zh-cn \
            luci-theme-argon luci-theme-footstrap luci-theme-material \
            luci-theme-openwrt luci-theme-openwrt-2020 \
-           luci-app-adblock-fast adblock-fast luci-i18n-adblock-fast-zh-cn ; do
+           luci-app-adblock-fast adblock-fast luci-i18n-adblock-fast-zh-cn \
+           luci-app-ddns-go luci-i18n-ddns-go-zh-cn \
+           luci-app-homeproxy luci-i18n-homeproxy-zh-cn \
+           luci-app-msd_lite luci-i18n-msd_lite-zh-cn \
+           luci-app-ttyd luci-i18n-ttyd-zh-cn \
+           luci-app-udpxy luci-i18n-udpxy-zh-cn \
+           luci-app-vlmcsd luci-i18n-vlmcsd-zh-cn \
+           luci-app-wechatpush luci-i18n-wechatpush-zh-cn \
+           luci-app-timewol luci-i18n-timewol-zh-cn \
+           luci-app-rtp2httpd luci-i18n-rtp2httpd-zh-cn \
+           luci-app-pbr luci-i18n-pbr-zh-cn \
+           luci-app-zerotier luci-i18n-zerotier-zh-cn \
+           luci-app-wol luci-i18n-wol-zh-cn ; do
   if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
     HIT="$HIT $pkg"
   fi
