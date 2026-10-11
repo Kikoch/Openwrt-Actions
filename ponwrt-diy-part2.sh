@@ -185,8 +185,8 @@ echo "=== 主题已收窄: 仅 bootstrap (argon/footstrap/material/openwrt/openw
 #   adblock-fast/Makefile 里是 `+!BUSYBOX_DEFAULT_AWK:gawk` 形式的**条件**依赖 ——
 #   busybox 自带时根本不会拉。撤回 =y 之后无人 select -> 关得掉。
 #   ⚠️ 两张表必须互斥: 同一符号同时出现在 require 与 forbid 里会让构建必然失败。
-FORBID_PKG_LIST="luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports luci-app-ddns-go luci-app-homeproxy luci-app-msd_lite luci-app-ttyd luci-app-udpxy luci-app-vlmcsd luci-app-wechatpush luci-app-timewol luci-app-rtp2httpd luci-app-pbr luci-app-zerotier luci-app-wol"
-FORBID_PKG_RE="luci-app-adblock-fast|luci-i18n-adblock-fast-zh-cn|adblock-fast|gawk|grep|sed|coreutils-sort|kmod-ovpn-backports|luci-app-ddns-go|luci-app-homeproxy|luci-app-msd_lite|luci-app-ttyd|luci-app-udpxy|luci-app-vlmcsd|luci-app-wechatpush|luci-app-timewol|luci-app-rtp2httpd|luci-app-pbr|luci-app-zerotier|luci-app-wol|luci-i18n-(ddns-go|homeproxy|msd[_-]lite|ttyd|udpxy|vlmcsd|wechatpush|timewol|rtp2httpd|pbr|zerotier|wol)-[a-z_-]+"
+FORBID_PKG_LIST="luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports"
+FORBID_PKG_RE="luci-app-adblock-fast|luci-i18n-adblock-fast-zh-cn|adblock-fast|gawk|grep|sed|coreutils-sort|kmod-ovpn-backports"
 HIT=""
 for pkg in $FORBID_PKG_LIST; do
   if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
