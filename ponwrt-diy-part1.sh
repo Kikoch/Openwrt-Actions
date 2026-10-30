@@ -33,6 +33,69 @@ for d in "$PWD/dl/go-mod-cache" /workdir/openwrt/dl/go-mod-cache; do
 done
 
 # ---------------------------------------------------------------
+# CVE-2026-98432 修复回移 (2026-10-30, Linux 内核 IPv4 TCP ireq_opt UAF, CVSS 9.8)
+#
+# 上游提交 e3f33b0a1d89 "ipv4: free inet_opt and ireq_opt after an RCU grace period"
+# (Eric Dumazet, 2026-10-05), 两行改动: inet_sock_destruct() 与
+# tcp_v4_reqsk_destructor() 里的 kfree() 换成 kfree_rcu()。
+#   tcp_v4_syn_recv_sock() 把 ireq->ireq_opt 的裸指针交给子套接字而不复制,
+#   子套接字释放时普通 kfree() 掉, 另一 CPU 仍可能通过请求套接字读该对象
+#   -> use-after-free (可 RCE)。触发条件: 对监听端口发带 IPv4 Options 的 SYN。
+#
+# 为什么必须自己回移: 修复矩阵里 6.18 分支要 6.18.56, 而上游 pbs05/ponwrt
+# master 到 2026-10-30 只到 6.18.55 —— 单纯重建救不了, 必须打补丁。
+# 回移补丁已对 v6.18.52 的 net/ipv4/af_inet.c / tcp_ipv4.c 干跑验证可应用。
+#
+# 补丁放 target/linux/generic/hack-6.18/ (通用栈, 不属 airoha 目标本地产物)。
+# 内核 bump 到 >= 6.18.56 后自动跳过, 不会因为补丁 redundant 把构建打挂。
+#
+# 注意: 这修的是固件本身。未刷入新固件前, 设备侧可以用 nftables 拦掉带
+#   IP Options 的入站报文做临时缓解 (见 05-技术 里的 CVE-2026-98432 笔记)。
+# ---------------------------------------------------------------
+CVE_98432_FIX=yes
+
+if [ "$CVE_98432_FIX" = "yes" ]; then
+  HACK_DIR=target/linux/generic/hack-6.18
+  KVER_FILE=target/linux/generic/kernel-6.18
+  SRC_PATCH="$GITHUB_WORKSPACE/patches/kernel/960-CVE-2026-98432-net-ipv4-kfree_rcu-ireq_opt.patch"
+
+  if [ ! -d "$HACK_DIR" ]; then
+    echo "FATAL: 找不到 $HACK_DIR, CVE-2026-98432 回移无法落地"
+    exit 1
+  fi
+  if [ ! -f "$SRC_PATCH" ]; then
+    echo "FATAL: 回移补丁不存在: $SRC_PATCH"
+    exit 1
+  fi
+
+  # 上游已修复则跳过 (6.18.56 起)
+  KVER_MIN=$(sed -n 's/^LINUX_VERSION-6.18 *= *\.\([0-9][0-9]*\).*/\1/p' "$KVER_FILE" 2>/dev/null | head -1)
+  if [ -z "$KVER_MIN" ]; then
+    echo "FATAL: 无法从 $KVER_FILE 解析 6.18 次版本号"
+    exit 1
+  fi
+
+  if [ "$KVER_MIN" -ge 56 ]; then
+    echo "=== 内核 6.18.$KVER_MIN >= 6.18.56, 上游已含 CVE-2026-98432 修复, 跳过回移 ==="
+  else
+    # 卫生: OpenWrt 会把整个补丁目录塞进内核树, 别留备份文件
+    rm -f "$HACK_DIR"/*.bak "$HACK_DIR"/*.orig 2>/dev/null || true
+    DST_PATCH="$HACK_DIR/960-CVE-2026-98432-net-ipv4-kfree_rcu-ireq_opt.patch"
+    cp "$SRC_PATCH" "$DST_PATCH"
+
+    # 断言: 2 个 hunk、2 条 -kfree / 2 条 +kfree_rcu, 缺一条都说明补丁被改坏了
+    N_HUNK=$(grep -c '^@@' "$DST_PATCH" || true)
+    N_MINUS=$(grep -c '^-.*kfree(rcu_dereference_protected' "$DST_PATCH" || true)
+    N_PLUS=$(grep -c '^+.*kfree_rcu(rcu_dereference_protected' "$DST_PATCH" || true)
+    if [ "$N_HUNK" != "2" ] || [ "$N_MINUS" != "2" ] || [ "$N_PLUS" != "2" ]; then
+      echo "FATAL: 回移补丁结构异常 (hunk=$N_HUNK minus=$N_MINUS plus=$N_PLUS, 预期 2/2/2)"
+      exit 1
+    fi
+    echo "=== CVE-2026-98432 回移已落盘: 内核 6.18.$KVER_MIN -> $DST_PATCH (2 hunk) ==="
+  fi
+fi
+
+# ---------------------------------------------------------------
 # LAN 口 QoS 通道修复 (2026-10-06 v7 定案, lan2/lan3 卡 500M)
 #
 # 症状: lan2 / lan3 上网被卡在 ~500 Mbps, lan4 满速 1000, lan1(2.5G) 满速。

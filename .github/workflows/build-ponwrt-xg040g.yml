@@ -4,10 +4,12 @@
 #   kconfig.pl 合并 configs + make defconfig + make
 # 源码 pin 到上游 master HEAD。
 #   旧 pin 04986da1e (2026-10-06) 已从上游消失: 上游重写历史, git ls-remote 查无此 SHA
-#   (Kikoch/ponwrt 镜像仍冻结在该提交)。故 2026-10-11 提升到 a57faf93c6
-#   (2026-10-09, merge PR #31 "fit-its")。
-#   相对旧 pin 的 diff 仅 an7581.mk/an7583.mk 的 EVB/HG5382A DEVICE_PACKAGES 调整,
-#   nokia_xg-040g-md-ubi 设备与 PON 全栈未动 -> 本次 bump 不影响既定配置与三道断言。
+#   (Kikoch/ponwrt 镜像仍冻结在该提交)。2026-10-11 提升到 a57faf93c6
+#   (2026-10-09, merge PR #31 "fit-its"); 2026-10-30 再跟到最新 03c1345447
+#   (2026-10-23, merge PR #55 from 1018ji/master; 另含 PR #46 h3c-fttr 等)。
+#   内核依旧 6.18.55 (LINUX_VERSION-6.18 = .55), 未达修复版 6.18.56,
+#   故 diy-part1 的 960-CVE-2026-98432 回移补丁照常注入 (2 hunk, kfree->kfree_rcu)。
+#   相对 a57faf93c6 的 diff 未触及 nokia_xg-040g-md-ubi 设备与 PON 全栈 -> 既定配置与三道断言不受影响。
 #   已含 usb-sfp 重构 (3cca3ed60) 与 EN8811H 复位时序主线修复 (69cd3e269,
 #   与本地 diy-part1 的 lan1 修复同值 -> diy-part1 已做成幂等)。
 #   历史已知良好版本: 5651948f9d (2026-09-25, usb-sfp 重构前)。
@@ -70,7 +72,7 @@ env:
   REPO_URL: https://github.com/pbs05/ponwrt
   # 2026-10-07 同步上游 master HEAD (2026-10-06 15:17 UTC)。
   # 旧 pin 5651948f9d (2026-09-25) 落后 132 commits; f44d1535b4 (9/18) 依旧不能用。
-  REPO_REF: a57faf93c6c3638ba3651690228aabaa51d3f235
+  REPO_REF: 03c134544714617e196dd399c85ebb90fb6eefa1
   CONFIG_FILE: ponwrt-extra.config
   DIY_P1_SH: ponwrt-diy-part1.sh
   DIY_P2_SH: ponwrt-diy-part2.sh
