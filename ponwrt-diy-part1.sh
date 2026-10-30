@@ -96,6 +96,34 @@ if [ "$CVE_98432_FIX" = "yes" ]; then
 fi
 
 # ---------------------------------------------------------------
+# 上游回归规避: hardware-support 与钉死 feeds/packages 的系统组 ID 冲突
+#
+# 症状 (run #36, 2026-10-30, 上游 03c1345447):
+#   package/feeds/packages/sane-backends/Makefile: id of group scanner collides
+#     with that defined in package/system/hardware-support/Makefile
+#   Failed to build tmp/.config-package.in -> prepare-tmpinfo Error 1
+# 根因: 上游在 a57faf93c6 之后新增了 package/system/hardware-support,
+#   其 scanner-support 子包 USERID:=:scanner=47, 与 pinned feeds/packages 里
+#   sane-backends 已声明的同名 scanner 组 ID 冲突。OpenWrt 在元数据阶段
+#   (prepare-tmpinfo, 扫全部包, 与是否选中无关) 直接判死。
+#   该包共声明 9 个 feature-gate 组 (audio/video/input/dvb/kvm/printer/
+#   scanner/hidraw), 大多与 feeds 既有包 (cups/alsa/...) 撞号,
+#   只修 scanner 会一个一个冒出来。
+#
+# 修法: 这个包我们完全不用 (路由器固件, 没开 ALL/ALL_KMODS, 子包一个都没选中),
+#   直接清掉它的全部 USERID 行 —— 组声明消失, 所有碰撞一次性解除,
+#   子包仍能正常编出 (只是不再分配系统组, 对我们无影响)。
+#   仅在该文件存在时操作, 上游去掉此包也不报错。
+# ---------------------------------------------------------------
+HS_MK=package/system/hardware-support/Makefile
+if [ -f "$HS_MK" ]; then
+  if grep -q 'USERID:=' "$HS_MK"; then
+    sed -i '/USERID:=/d' "$HS_MK"
+    echo "=== 已清除 hardware-support 的全部 USERID 组声明, 规避与 pinned feeds (sane-backends 等) 的组 ID 碰撞 ==="
+  fi
+fi
+
+# ---------------------------------------------------------------
 # LAN 口 QoS 通道修复 (2026-10-06 v7 定案, lan2/lan3 卡 500M)
 #
 # 症状: lan2 / lan3 上网被卡在 ~500 Mbps, lan4 满速 1000, lan1(2.5G) 满速。
