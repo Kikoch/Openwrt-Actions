@@ -1,23 +1,22 @@
 #=================================================
 # Build PonWrt (Nokia XG-040G-MD UBI, 保留 PON 光口)
+#
 # 构建方法对齐 PonWrt 官方 CI (.github/workflows/release.yml):
 #   kconfig.pl 合并 configs + make defconfig + make
-# 源码 pin 到上游 master HEAD。
-#   旧 pin 04986da1e (2026-10-06) 已从上游消失: 上游重写历史, git ls-remote 查无此 SHA
-#   (Kikoch/ponwrt 镜像仍冻结在该提交)。2026-10-11 提升到 a57faf93c6
-#   (2026-10-09, merge PR #31 "fit-its"); 2026-10-30 再跟到最新 03c1345447
-#   (2026-10-23, merge PR #55 from 1018ji/master; 另含 PR #46 h3c-fttr 等)。
-#   内核依旧 6.18.55 (LINUX_VERSION-6.18 = .55), 未达修复版 6.18.56,
-#   故 diy-part1 的 960-CVE-2026-98432 回移补丁照常注入 (2 hunk, kfree->kfree_rcu)。
-#   相对 a57faf93c6 的 diff 未触及 nokia_xg-040g-md-ubi 设备与 PON 全栈 -> 既定配置与三道断言不受影响。
-#   已含 usb-sfp 重构 (3cca3ed60) 与 EN8811H 复位时序主线修复 (69cd3e269,
-#   与本地 diy-part1 的 lan1 修复同值 -> diy-part1 已做成幂等)。
-#   历史已知良好版本: 5651948f9d (2026-09-25, usb-sfp 重构前)。
-# feeds 维持原 pin (见 ponwrt-feeds.conf), 保证可复现且 immortalwrt/luci 的 openclash 可用。
+#
+# 2026-11-03 起策略: 纯上游, 零源码补丁
+#   - 源码 pin 到 pbs05/ponwrt master HEAD (当前 03c1345447, 2026-10-23)
+#   - feeds 默认跟随源码自带 feeds.conf.default (不钉版本, 等同官方 CI)
+#   - diy-part1 不再注入任何补丁 (CVE 回移 / QoS 999 / DTS 复位 / 组 ID 规避 全部移除)
+#   - 原因: 本地补丁随上游演进而失效 (run #23 / #36), 不再维护
+#   - 代价: CVE-2026-98432 (内核 6.18.55) 未回移, 待上游 bump 6.18.56
+#   - 上游 69cd3e269 已含 EN8811H 复位时序修复, lan1 2.5G 冷启动无需本地改
+#   - 自动编译: 由 auto-build-ponwrt.yml 每 6h 检查上游并触发
+#
 # 包组成 2026-10-08: 恢复 IPTV (luci-app-iptv + luci-i18n-iptv-zh-cn),
 #   移除 adblock 全家 (luci-app-adblock-fast / adblock-fast /
 #   luci-i18n-adblock-fast-zh-cn + gawk/grep/sed/coreutils-sort)
-# 编译后执行 scripts/verify-firmware.sh 做产物层校验
+# 编译后执行 scripts/verify-ponwrt.sh 做产物层校验
 #=================================================
 
 name: Build PonWrt XG-040G-MD
@@ -34,13 +33,13 @@ on:
         required: false
         default: ""
       pin_feeds:
-        description: "固定 feeds 到与源码同期的提交 (yes/no)"
+        description: "固定 feeds 到 ponwrt-feeds.conf 的旧提交 (默认 no=跟随上游 HEAD)"
         required: false
-        default: "yes"
+        default: "no"
         type: choice
         options:
-          - "yes"
           - "no"
+          - "yes"
       skip_verify:
         description: "跳过产物层校验 (仅排障用, yes/no)"
         required: false
@@ -70,8 +69,7 @@ on:
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
-  # 2026-10-07 同步上游 master HEAD (2026-10-06 15:17 UTC)。
-  # 旧 pin 5651948f9d (2026-09-25) 落后 132 commits; f44d1535b4 (9/18) 依旧不能用。
+  # 上游 master HEAD (2026-10-23, merge PR #55)。auto-build-ponwrt.yml 会自动维护。
   REPO_REF: 03c134544714617e196dd399c85ebb90fb6eefa1
   CONFIG_FILE: ponwrt-extra.config
   DIY_P1_SH: ponwrt-diy-part1.sh
@@ -104,7 +102,14 @@ jobs:
     # PONWRT_RUNNER, 值填你那边 larger runner 的 label。不建就是默认的 4 vCPU
     # ubuntu-24.04 —— 单次编译约 3.5 小时(实测 198~230 分钟), 换 16 核大约 1 小时。
     runs-on: ${{ vars.PONWRT_RUNNER || 'ubuntu-24.04' }}
-    if: github.event.repository.owner.id == github.event.sender.id
+    # push 事件只允许仓库所有者触发 (挡 fork 推送)。
+    # dispatch 事件 (workflow_dispatch / repository_dispatch) 必须放行 ——
+    # 自动编译看门狗用 GITHUB_TOKEN 触发时 sender 是 github-actions[bot],
+    # 不等于 owner.id, 旧写法会把自动构建整个判掉。dispatch 本身已要求
+    # 写权限 (只有 owner/collaborator 能发), 没有 fork 风险。
+    if: >-
+      github.event_name != 'push' ||
+      github.event.repository.owner.id == github.event.sender.id
 
     steps:
     - name: Checkout
@@ -180,14 +185,16 @@ jobs:
         restore-keys: |
           ponwrt-ccache-
 
-    - name: Load custom feeds (pinned)
+    - name: Load feeds
       run: |
-        # pin_feeds=no 时不覆盖，沿用源码自带 feeds.conf.default (跟随上游 HEAD)
-        if [ "${{ github.event.inputs.pin_feeds }}" != "no" ] && [ -e "$FEEDS_CONF" ]; then
-          echo "使用固定 feeds: $FEEDS_CONF"
+        # 默认 (含 push / 定时自动构建) 一律使用源码自带 feeds.conf.default,
+        # 跟随上游 HEAD —— 与 pbs05/ponwrt 官方 CI 完全一致。
+        # 只有显式 pin_feeds=yes 才覆盖成 ponwrt-feeds.conf 里的旧提交 (复现用途)。
+        if [ "${{ github.event.inputs.pin_feeds }}" = "yes" ] && [ -e "$FEEDS_CONF" ]; then
+          echo "pin_feeds=yes: 使用固定 feeds $FEEDS_CONF"
           cp "$FEEDS_CONF" openwrt/feeds.conf.default
         else
-          echo "pin_feeds=no，使用源码自带 feeds.conf.default"
+          echo "使用源码自带 feeds.conf.default (跟随上游 HEAD, 等同官方 CI)"
         fi
         # 语法预检: scripts/feeds 的 parse_file 用 s/#.+$// 去注释, 要求 # 后
         # 至少有一个字符。只有 # 的行不会被剥掉, 随后匹配 src-<type> 失败并 die

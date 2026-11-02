@@ -1,0 +1,114 @@
+#=================================================
+# PonWrt 上游更新自动编译看门狗 (Nokia XG-040G-MD)
+#
+# 职责:
+#   1. 每 6 小时检查 pbs05/ponwrt master HEAD
+#   2. 与 build-ponwrt-xg040g.yml 里的 REPO_REF 比对
+#   3. 有变化 -> 更新 pin + 提交 [skip ci] + 触发构建
+#   4. 未变化 -> 什么都不做 (省 CI 配额)
+#
+# 手动运行 (Actions 页面 Run workflow):
+#   force=no  -> 仅在上游有更新时构建 (等同定时)
+#   force=yes -> 无条件构建一次 (验证链路 / 需要新产物时用)
+#
+# 依赖 build-ponwrt-xg040g.yml 的触发守卫允许 dispatch 事件:
+#   看门狗用 GITHUB_TOKEN 触发, sender 是 github-actions[bot] 而非 owner,
+#   旧守卫 (sender == owner) 会把构建判掉 -> 已放宽为只对 push 事件校验 owner。
+#=================================================
+name: Auto-build PonWrt on upstream update
+
+on:
+  schedule:
+    # 每 6 小时一次, 分钟错开到 17, 避开 GitHub 整点调度高峰
+    # 00:17 / 06:17 / 12:17 / 18:17 UTC = 08:17 / 14:17 / 20:17 / 02:17 北京时间
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "上游未变也强制构建 (yes/no)"
+        required: false
+        default: "no"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: ponwrt-autobuild
+  # 看门狗很轻 (秒级), 但别和上一次撞车
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Resolve upstream HEAD and current pin
+        id: resolve
+        run: |
+          UP="$(git ls-remote https://github.com/pbs05/ponwrt HEAD | awk '{print $1}')"
+          CUR="$(grep -E '^[[:space:]]*REPO_REF:' .github/workflows/build-ponwrt-xg040g.yml | head -1 | awk '{print $2}')"
+          if [ -z "$UP" ]; then
+            echo "::error::无法读取 pbs05/ponwrt HEAD (git ls-remote 失败或仓库不存在)"
+            exit 1
+          fi
+          if [ -z "$CUR" ]; then
+            echo "::error::无法从 build-ponwrt-xg040g.yml 解析 REPO_REF"
+            exit 1
+          fi
+          echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          echo "上游 HEAD : $UP"
+          echo "当前 pin  : $CUR"
+
+      - name: Decide whether to build
+        id: decide
+        run: |
+          if [ "${{ steps.resolve.outputs.upstream }}" != "${{ steps.resolve.outputs.current }}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "上游有更新 -> 更新 pin 并构建"
+          elif [ "${{ github.event.inputs.force }}" = "yes" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "force=yes -> 无条件构建"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "上游未变, 跳过 (不消耗 3.5h 构建配额)"
+          fi
+
+      - name: Bump pin and commit
+        if: steps.decide.outputs.changed == 'true'
+        run: |
+          UP="${{ steps.resolve.outputs.upstream }}"
+          sed -i -E "s|^([[:space:]]*REPO_REF:).*|\1 $UP|" .github/workflows/build-ponwrt-xg040g.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/build-ponwrt-xg040g.yml
+          if git diff --cached --quiet; then
+            echo "pin 未变 (force 场景), 无需提交"
+            exit 0
+          fi
+          git commit -m "chore(ponwrt): auto-build ref pbs05/ponwrt@$UP [skip ci]"
+          # 推送竞态: 期间若有别的提交先进来, rebase 后重试一次
+          if ! git push; then
+            echo "push 失败, 尝试 rebase 后重试"
+            git pull --rebase --autostash
+            git push
+          fi
+          echo "已提交并推送 pin: $UP"
+
+      - name: Trigger build
+        if: steps.decide.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run build-ponwrt-xg040g.yml \
+            --repo "${{ github.repository }}" \
+            --ref "${{ github.ref_name }}"
+          echo "已触发构建: build-ponwrt-xg040g.yml (ref=${{ github.ref_name }})"
+          echo "运行页: https://github.com/${{ github.repository }}/actions/workflows/build-ponwrt-xg040g.yml"
