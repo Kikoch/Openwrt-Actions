@@ -4,14 +4,23 @@
 # 构建方法对齐 PonWrt 官方 CI (.github/workflows/release.yml):
 #   kconfig.pl 合并 configs + make defconfig + make
 #
-# 2026-11-03 起策略: 纯上游, 零源码补丁
-#   - 源码 pin 到 pbs05/ponwrt master HEAD (当前 03c1345447, 2026-10-23)
-#   - feeds 默认跟随源码自带 feeds.conf.default (不钉版本, 等同官方 CI)
-#   - diy-part1 不再注入任何补丁 (CVE 回移 / QoS 999 / DTS 复位 / 组 ID 规避 全部移除)
-#   - 原因: 本地补丁随上游演进而失效 (run #23 / #36), 不再维护
-#   - 代价: CVE-2026-98432 (内核 6.18.55) 未回移, 待上游 bump 6.18.56
-#   - 上游 69cd3e269 已含 EN8811H 复位时序修复, lan1 2.5G 冷启动无需本地改
-#   - 自动编译: 由 auto-build-ponwrt.yml 每 6h 检查上游并触发
+# 2026-11-04 起策略: 纯上游 + 两个上游定点修复 (各自可开关)
+#   - patches/airoha-xpon/  : 上游 issue #49 的 MBI RX 溢出风暴补丁
+#       症状: int=0x00008000 fifo=0x00000180 刷屏 -> PPPoE 掉线且永不恢复
+#       修法: 风暴达阈值(32次/60s)触发 MAC epoch 复位
+#       实测: 死锁 463s + 手动 network restart -> 17.6s 全自动 (两型号验证)
+#       应用点: feeds install 之后改 pon_drivers feed 源码
+#   - patches/airoha-kernel/: 上游 PR #64 (draft) 的 947 SRAM 拥塞剖面
+#       症状: lan2/lan3 互联网方向卡 300-500M, lan1/lan4 正常
+#       修法: AN7581 QDMA0/QDMA1 按 SDK 16K SRAM 剖面初始化动态阈值
+#       应用点: diy-part1 复制进 target/linux/airoha/patches-6.18/
+#   开关: 手动 dispatch 时 mbi_fix=no / sram_fix=no 可分别关掉
+#
+# 2026-11-03 曾改为纯上游零补丁 (run #23 补丁被上游覆盖 / run #36 组 ID 碰撞)。
+#   本次只回加上游自己已实测的修复, 不再自创改法, 且每个都带应用断言。
+#   代价仍需明确: CVE-2026-98432 (内核 6.18.55) 依然未回移, 待上游 bump 6.18.56
+#   上游 69cd3e269 已含 EN8811H 复位时序修复, lan1 2.5G 冷启动无需本地改
+#   自动编译: 由 auto-build-ponwrt.yml 每 6h 检查上游并触发
 #
 # 包组成 2026-10-08: 恢复 IPTV (luci-app-iptv + luci-i18n-iptv-zh-cn),
 #   移除 adblock 全家 (luci-app-adblock-fast / adblock-fast /
@@ -48,6 +57,22 @@ on:
         options:
           - "no"
           - "yes"
+      mbi_fix:
+        description: "应用 MBI RX 溢出复位补丁 (上游 issue #49, 修早上拨号断开死锁)"
+        required: false
+        default: "yes"
+        type: choice
+        options:
+          - "yes"
+          - "no"
+      sram_fix:
+        description: "应用 947 SRAM 拥塞剖面 (上游 PR #64 draft, 修 lan2/lan3 卡 500M)"
+        required: false
+        default: "yes"
+        type: choice
+        options:
+          - "yes"
+          - "no"
       release:
         description: "是否创建 Release (yes/no)"
         required: false
@@ -66,6 +91,10 @@ on:
       # paths 是 OR 语义, 共用文件会让改一次校验把 TR3000 线也拉起来
       # (它单次 3.5 小时)。
       - "scripts/verify-ponwrt.sh"
+      # 补丁本身改动必须触发本线; 只影响 PonWrt (不会拉起 TR3000)
+      - "patches/airoha-kernel/**"
+      - "patches/airoha-xpon/**"
+      - "scripts/apply-pon-driver-patches.sh"
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
@@ -206,6 +235,10 @@ jobs:
         awk '!/^[[:space:]]*#/ && NF {print "  " $0}' openwrt/feeds.conf.default | head -20
 
     - name: Run DIY part1 (自定义前置脚本)
+      env:
+        # 非 workflow_dispatch 触发 (push / repository_dispatch) 时 inputs 为空,
+        # 表达式判 false -> 默认 '1' 启用。只有手动选 no 才关。
+        WITH_SRAM_FIX: ${{ github.event.inputs.sram_fix == 'no' && '0' || '1' }}
       run: |
         chmod +x $DIY_P1_SH
         cd openwrt
@@ -216,6 +249,20 @@ jobs:
 
     - name: Install feeds
       run: cd openwrt && ./scripts/feeds install -a
+
+    # 必须放在 feeds install 之后: airoha-xpon 驱动在 pon_drivers feed 里,
+    # 而 feeds 源码要 update 之后才存在 (diy-part1 阶段还没有)。
+    - name: Apply PON driver patches (上游 issue #49)
+      env:
+        WITH_MBI_FIX: ${{ github.event.inputs.mbi_fix == 'no' && '0' || '1' }}
+      run: |
+        if [ "$WITH_MBI_FIX" != "1" ]; then
+          echo "mbi_fix=no: 跳过 MBI RX 溢出复位补丁 (上游默认行为)"
+          exit 0
+        fi
+        chmod +x scripts/apply-pon-driver-patches.sh
+        cd openwrt
+        "$GITHUB_WORKSPACE/scripts/apply-pon-driver-patches.sh"
 
     - name: Load configuration (官方 kconfig 合并 + 附加包)
       # 显式 shell: bash —— 既拿回 pipefail (默认的 `bash -e {0}` 没有, 失败会被吞掉),

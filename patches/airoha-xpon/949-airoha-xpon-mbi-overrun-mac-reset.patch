@@ -1,0 +1,107 @@
+diff --git a/airoha-xpon/src/airoha-xpon-main.c b/airoha-xpon/src/airoha-xpon-main.c
+index 9623c27..d9a4c1d 100644
+--- a/airoha-xpon/src/airoha-xpon-main.c
++++ b/airoha-xpon/src/airoha-xpon-main.c
+@@ -450,6 +450,10 @@ static void airoha_xpon_link_work(struct work_struct *work)
+ 			airoha_xpon_xgpon_restart_mac(xpon, "OLT Deactivate");
+ 		if (atomic_xchg(&xpon->data_path_retry_pending, 0))
+ 			airoha_xpon_retry_data_paths(xpon);
++		/* MBI RX overrun storm: only a MAC epoch reset clears the wedge. */
++		if (atomic_xchg(&xpon->mbi_reset_pending, 0))
++			airoha_xpon_xgpon_restart_mac(xpon,
++			                              "MBI RX overrun storm");
+ 	}
+ 
+ 	if (airoha_xpon_handle_optical_loss_locked(xpon, phy_events, &delay))
+@@ -588,6 +592,7 @@ static int airoha_xpon_probe(struct platform_device *pdev)
+ 	atomic_set(&xpon->mac_restart_pending, 0);
+ 	atomic_set(&xpon->tx_resync_pending, 0);
+ 	atomic_set(&xpon->data_path_retry_pending, 0);
++	atomic_set(&xpon->mbi_reset_pending, 0);
+ 	atomic_set(&xpon->epon.discovery_gate_count, 0);
+ 	atomic_set(&xpon->epon.register_request_count, 0);
+ 	xpon->lifecycle = AIROHA_XPON_STOPPED;
+diff --git a/airoha-xpon/src/airoha-xpon-private.h b/airoha-xpon/src/airoha-xpon-private.h
+index eabcd9c..d8f0224 100644
+--- a/airoha-xpon/src/airoha-xpon-private.h
++++ b/airoha-xpon/src/airoha-xpon-private.h
+@@ -152,6 +152,7 @@ struct airoha_xpon_stats {
+ 	unsigned int mac_error_irq_count;
+ 	unsigned int rx_mbi_header_overrun_irq_count;
+ 	unsigned int rx_mbi_payload_overrun_irq_count;
++	unsigned int mbi_reset_count;
+ 	unsigned int tx_late_error_count;
+ 	unsigned int tx_resync_count;
+ 	unsigned int tx_resync_failure_count;
+@@ -260,6 +261,10 @@ struct airoha_xpon {
+ 	atomic_t tx_resync_pending;
+ 	/* Assign_Alloc-ID queues deferred data paths for link_work. */
+ 	atomic_t data_path_retry_pending;
++	/* IRQ counts MBI RX overrun storms; link_work resets the MAC epoch. */
++	atomic_t mbi_reset_pending;
++	unsigned int mbi_overrun_streak;
++	unsigned long mbi_reset_jiffies;
+ 	enum airoha_xgpon_onu_state onu_state;
+ 	u16 onu_id;
+ 	u32 eqd;
+@@ -296,6 +301,15 @@ struct airoha_xpon {
+  * Every fifth recovery from attempt 2 also resets SCU; others reset PMA.
+  */
+ #define AIROHA_XPON_FULL_REINIT_PERIOD 5
++/*
++ * An MBI RX overrun storm is a hard fault, not transient noise: once it
++ * starts the downstream path stops draining and MBI_RX_STOP_DONE never
++ * asserts, so only a full MAC epoch reset recovers the link (upstream
++ * issue #49, XG-040G-MD / ZN504XG-D). Convert the dead state into a short
++ * automatic link flap once a dense burst is observed.
++ */
++#define AIROHA_XPON_MBI_RESET_THRESHOLD  32
++#define AIROHA_XPON_MBI_RESET_MIN_MS     60000
+ 
+ static inline u32 airoha_xgpon_read(struct airoha_xpon *xpon, u32 reg)
+ {
+diff --git a/airoha-xpon/src/airoha-xpon-xgpon.c b/airoha-xpon/src/airoha-xpon-xgpon.c
+index fb86a12..a68c886 100644
+--- a/airoha-xpon/src/airoha-xpon-xgpon.c
++++ b/airoha-xpon/src/airoha-xpon-xgpon.c
+@@ -292,6 +292,30 @@ irqreturn_t airoha_xpon_xgpon_irq(struct airoha_xpon *xpon)
+ 			xpon->stats.rx_mbi_header_overrun_irq_count++;
+ 		if (fifo_error & AIROHA_XGPON_FIFO_ERR_RX_MBI_PAYLOAD_OVERRUN)
+ 			xpon->stats.rx_mbi_payload_overrun_irq_count++;
++		/*
++		 * A dense MBI RX overrun burst means the downstream stopped
++		 * draining and will not recover by itself. Queue a MAC epoch
++		 * reset instead of only logging; the O5 path re-arms upstream
++		 * and userspace re-publishes the data paths by itself.
++		 */
++		if (fifo_error &
++		    (AIROHA_XGPON_FIFO_ERR_RX_MBI_HEADER_OVERRUN |
++		     AIROHA_XGPON_FIFO_ERR_RX_MBI_PAYLOAD_OVERRUN)) {
++			unsigned long reset_at;
++
++			xpon->mbi_overrun_streak++;
++			reset_at = xpon->mbi_reset_jiffies +
++			           msecs_to_jiffies(
++			                   AIROHA_XPON_MBI_RESET_MIN_MS);
++			if (xpon->mbi_overrun_streak >=
++			            AIROHA_XPON_MBI_RESET_THRESHOLD &&
++			    time_after(jiffies, reset_at)) {
++				xpon->mbi_overrun_streak = 0;
++				xpon->mbi_reset_jiffies = jiffies;
++				xpon->stats.mbi_reset_count++;
++				atomic_set(&xpon->mbi_reset_pending, 1);
++			}
++		}
+ 
+ 		airoha_xgpon_write(xpon, AIROHA_XGPON_FIFO_ERR_STS, U32_MAX);
+ 		airoha_xgpon_write(xpon, AIROHA_XGPON_TX_ERR_STS, U32_MAX);
+@@ -317,7 +341,8 @@ irqreturn_t airoha_xpon_xgpon_irq(struct airoha_xpon *xpon)
+ 			xpon->dev,
+ 			"PLOAMd FIFO drain reached the per-IRQ safety limit\n");
+ 	if (atomic_read(&xpon->mac_restart_pending) ||
+-	    atomic_read(&xpon->data_path_retry_pending))
++	    atomic_read(&xpon->data_path_retry_pending) ||
++	    atomic_read(&xpon->mbi_reset_pending))
+ 		mod_delayed_work(system_wq, &xpon->link_work, 0);
+ 
+ 	return IRQ_HANDLED;
