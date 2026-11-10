@@ -108,20 +108,24 @@ echo "=== 关键驱动校验通过 ==="
 #   这组需求项全部纳入断言 (本体 + 中文翻译 + 内核依赖)。
 #   同日第二处变更: IPTV 由"砍"改回"要" -> luci-app-iptv(+i18n) 进入本表,
 #   adblock-fast 全家从本表移出 (改入下方 FORBID 表)。
+# 2026-11-10 按 16.1 实机基线复对齐:
+#   zram-swap / kmod-zram 从本表移出 (改入 FORBID 表, 1.9G 内存机型已剔除);
+#   e2fsprogs / blkid / fdisk 加入本表 —— 原本是 overlay 后装包, sysupgrade
+#   保文件不保包, 不编进固件刷完就丢, U 盘 ext4 挂载会连带失效。
 #   注意这里**只放已核实存在于本 pin feed 里的符号** —— 放错一个 (比如上游没有
 #   的 luci-i18n-openclash-zh-cn / luci-i18n-wireguard-zh-cn) 就会把好构建判死:
 #     luci-app-openclash      luci feed applications/ (自带 po/zh-cn, 中文在包体内)
 #     luci-i18n-ddns-zh-cn    luci feed applications/luci-app-ddns/po/zh_Hans/
 #     luci-proto-wireguard    luci feed protocols/ (无 po/, 故无 i18n 包)
 #     ddns-scripts-dnspod     packages feed, luci-app-ddns 的后端脚本
-#     zram-swap / kmod-zram   packages feed, 无 LuCI 页面故无 i18n
+#     e2fsprogs/blkid/fdisk   base feed, 设备上确有 (2.42.2-r1 / 1.47.4-r1)
 #     luci-app-iptv(+i18n)    pon_userspace feed 的 luci-app-iptv/ (pin cce9d756,
 #                             有 po/zh_Hans/iptv.po -> 生成 luci-i18n-iptv-zh-cn)
 for pkg in luci-app-openclash luci-app-iptv luci-i18n-iptv-zh-cn \
            luci-app-ddns luci-i18n-ddns-zh-cn ddns-scripts-dnspod \
            luci-proto-wireguard wireguard-tools kmod-wireguard \
            kmod-udptunnel4 kmod-udptunnel6 \
-           zram-swap kmod-zram \
+           e2fsprogs blkid fdisk \
            luci-theme-bootstrap ; do
   if ! grep -q "^CONFIG_PACKAGE_${pkg}=y" .config; then
     echo "FATAL: ${pkg} 在 defconfig 之后不是 =y —— 大概率是 feeds 里没这个包"
@@ -131,7 +135,7 @@ for pkg in luci-app-openclash luci-app-iptv luci-i18n-iptv-zh-cn \
     exit 1
   fi
 done
-echo "=== 指定包含的包全部命中: openclash / iptv(+zh-cn) / ddns(+zh-cn) / wireguard / zram / bootstrap ==="
+echo "=== 指定包含的包全部命中: openclash / iptv(+zh-cn) / ddns(+zh-cn) / wireguard / U盘ext4工具链 / bootstrap ==="
 
 # 强校验: 主题只剩 bootstrap (2026-10-08 需求)。
 #   =m 也算命中 —— m 照样编译, 只是不进镜像; 需求是"移除其余主题文件"。
@@ -185,8 +189,14 @@ echo "=== 主题已收窄: 仅 bootstrap (argon/footstrap/material/openwrt/openw
 #   adblock-fast/Makefile 里是 `+!BUSYBOX_DEFAULT_AWK:gawk` 形式的**条件**依赖 ——
 #   busybox 自带时根本不会拉。撤回 =y 之后无人 select -> 关得掉。
 #   ⚠️ 两张表必须互斥: 同一符号同时出现在 require 与 forbid 里会让构建必然失败。
-FORBID_PKG_LIST="luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports"
-FORBID_PKG_RE="luci-app-adblock-fast|luci-i18n-adblock-fast-zh-cn|adblock-fast|gawk|grep|sed|coreutils-sort|kmod-ovpn-backports"
+#
+#   2026-11-10 变更 —— 按 16.1 实机基线新增六个:
+#     attendedsysupgrade 全家 (前端/中文/common): 本机走自建云编译, 设备已 apk del
+#     zram-swap / kmod-zram / kmod-lib-lzo-rle: 1.9G 内存备机, /proc/swaps 空
+#   两个 zram 本体从上方"指定包含"表移出, 这里必须同步收编, 否则旧断言会把
+#   正确构建判死。注意 kmod-lib-lzo / kmod-lib-lz4 **不在**本表: 设备仍在用。
+FORBID_PKG_LIST="luci-app-adblock-fast luci-i18n-adblock-fast-zh-cn adblock-fast gawk grep sed coreutils-sort kmod-ovpn-backports luci-app-attendedsysupgrade luci-i18n-attendedsysupgrade-zh-cn attendedsysupgrade-common zram-swap kmod-zram kmod-lib-lzo-rle"
+FORBID_PKG_RE="luci-app-adblock-fast|luci-i18n-adblock-fast-zh-cn|adblock-fast|gawk|grep|sed|coreutils-sort|kmod-ovpn-backports|luci-app-attendedsysupgrade|luci-i18n-attendedsysupgrade-zh-cn|attendedsysupgrade-common|zram-swap|kmod-zram|kmod-lib-lzo-rle"
 HIT=""
 for pkg in $FORBID_PKG_LIST; do
   if grep -q "^CONFIG_PACKAGE_${pkg}=y" .config || grep -q "^CONFIG_PACKAGE_${pkg}=m" .config; then
@@ -200,7 +210,7 @@ if [ -n "$HIT" ]; then
   err "FATAL: 已砍掉的包又冒出来了:$HIT${NL}$(grep -E "^CONFIG_PACKAGE_(${FORBID_PKG_RE})=" .config || true)"
   exit 1
 fi
-echo "=== 已砍包确认全部关闭: adblock-fast 全家(前端/后端/中文 + gawk/grep/sed/coreutils-sort) / kmod-ovpn-backports ==="
+echo "=== 已砍包确认全部关闭: adblock-fast 全家 / kmod-ovpn-backports / attendedsysupgrade 全家 / zram 三件套 ==="
 echo "=== (shellsync / kmod-macvlan / kmod-mppe 是 ppp 的硬依赖, 保留, 见上方注释) ==="
 
 # 强校验: 内核与全部 kmod 不再产 DWARF 调试信息 (编译时间 + 磁盘)

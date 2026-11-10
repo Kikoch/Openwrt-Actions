@@ -2,7 +2,7 @@
 # 这些包必须出现在固件的 *.manifest 里, 否则 verify-firmware.sh 判定失败,
 # 不上传 artifact、不发布 Release。
 #
-# 只列"缺了就废"的包: PON 光口、2.5G PHY、NPU 固件、zram。
+# 只列"缺了就废"的包: PON 光口、2.5G PHY、NPU 固件、U 盘 ext4 工具链。
 # 不要往这里塞可选包 —— 那会让校验变成噪音。
 
 # PON 全栈 (光口失效 = 这台机器失去意义)
@@ -20,12 +20,15 @@ airoha-en8811h-firmware
 # NPU 固件
 airoha-en7581-npu-firmware
 
-# zram: 小内存设备 OOM 兜底。
-# 内核版本一变, 外部 apk 源里就没有配套的 kmod-zram, 只能随固件编。
-# 若在 ponwrt-extra.config 里注释掉 zram 的包, 必须同时注释掉这两行,
-# 否则 verify-firmware.sh 会因 manifest 缺包判定失败。
-zram-swap
-kmod-zram
+# U 盘 ext4 工具链 (2026-11-10 按 16.1 实机基线新增):
+#   /etc/openclash bind 到 U 盘, fstab check_fs='1' 挂载前跑 e2fsck。
+#   这三个包原先是 overlay 后装的, sysupgrade 保文件不保包 —— 不进固件
+#   就等于刷完丢工具链, U 盘挂不上、OC 降级回 overlay 兜底副本。
+#   zram-swap / kmod-zram 两行已于 11-10 删除 (1.9G 内存备机已剔除 zram),
+#   同时移到 workflow FORBID_PKGS 做产物层反向校验。
+e2fsprogs
+blkid
+fdisk
 
 # 用户指定必须包含的 LuCI 应用。
 # openclash: run #16 时包既没进 feed 也没进产物, 刷完才发现没有代理可用。
@@ -40,7 +43,7 @@ luci-app-openclash
 luci-app-iptv
 luci-i18n-iptv-zh-cn
 
-# 2026-10-08 需求项 (OpenClash / WireGuard / DDNS(dnspod) / zram / bootstrap 主题)
+# 2026-10-08 需求项 (OpenClash / WireGuard / DDNS(dnspod) / bootstrap 主题；zram 于 11-10 剔除)
 # 在 manifest 层再确认一次 —— diy-part2 只保证 .config 里 =y,
 # 产物里到底有没有得看这里。
 #
