@@ -18,8 +18,20 @@
 #
 # 2026-11-03 曾改为纯上游零补丁 (run #23 补丁被上游覆盖 / run #36 组 ID 碰撞)。
 #   本次只回加上游自己已实测的修复, 不再自创改法, 且每个都带应用断言。
-#   代价仍需明确: CVE-2026-98432 (内核 6.18.55) 依然未回移, 待上游 bump 6.18.56
 #   上游 69cd3e269 已含 EN8811H 复位时序修复, lan1 2.5G 冷启动无需本地改
+#
+# 2026-11-10 抬基线: 03c1345447 -> d9dd3a49f7 (上游 641 个提交, 内核 6.18.55 -> 6.18.60)
+#   - CVE-2026-98432 随内核 bump 已消失, 不再接受该代价
+#   - 两个补丁已在新基线上复核 (见 docs/或本次提交说明):
+#       949: 对驱动 HEAD 2789b97 (PKG_RELEASE 69) git apply --check 通过, 仅行号偏移
+#       947: 在 6.18.60 源码上按字母序 git apply 完整 172 个上游补丁 (172/172 通过),
+#            再链式应用 947-01 -> 947-02 均成功; 落地断言与编译期依赖符号全在
+#            (airoha_is_7581 / qdma->eth / qdma[2] / REG_LMGR_INIT_CFG /
+#            TXQ_CNGST_* / airoha_qdma_rr|wr|rmw); 函数插在 airoha_qdma_init_qos 之后
+#   - 上游新增且对本机有用: 928 ppe/bind_rate debugfs 可写、915-02 卸载流带 DSCP、
+#     999 mt7530 trap BPDU/LLDP、KASLR、EN7572 TX 就绪回报+MD32 重载 (驱动 69)
+#   - 机型定义/DTS 逐字未变
+#   - 注意: 默认 feeds 不 pin, 驱动会跟到当时 master; 别"pin 不动只重编"造成混血
 #   自动编译: 由 auto-build-ponwrt.yml 每 6h 检查上游并触发
 #
 # 包组成 2026-10-08: 恢复 IPTV (luci-app-iptv + luci-i18n-iptv-zh-cn),
@@ -95,11 +107,17 @@ on:
       - "patches/airoha-kernel/**"
       - "patches/airoha-xpon/**"
       - "scripts/apply-pon-driver-patches.sh"
+      # REPO_REF / 注入逻辑都在这个文件里, 改 pin 必须触发构建。
+      # 之前漏了这条 -> 看门狗 bump pin 后只能靠 gh workflow run 单条路径,
+      # 一旦那条 dispatch 失效就静默失联 (2026-11-04..11-10 pin 6 天没动)。
+      # 本文件是本线专属, TR3000 的 paths 不含它, 不会误拉起那条 3.5h 线。
+      - ".github/workflows/build-ponwrt-xg040g.yml"
 
 env:
   REPO_URL: https://github.com/pbs05/ponwrt
-  # 上游 master HEAD (2026-10-23, merge PR #55)。auto-build-ponwrt.yml 会自动维护。
-  REPO_REF: 03c134544714617e196dd399c85ebb90fb6eefa1
+  # 上游 master HEAD (2026-11-08, airoha: fix debug format specifiers)。
+  # auto-build-ponwrt.yml 每 6h 自动维护; 2026-11-10 由 03c1345447 手动抬升。
+  REPO_REF: d9dd3a49f7bb7661c01e9c57c9e2aac2a1114b3e
   CONFIG_FILE: ponwrt-extra.config
   DIY_P1_SH: ponwrt-diy-part1.sh
   DIY_P2_SH: ponwrt-diy-part2.sh
