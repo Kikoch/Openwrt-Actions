@@ -2,25 +2,28 @@
 # DIY 前置脚本（feeds 更新前执行）
 #
 # =====================================================================
-# 2026-11-03 战略调整：本线不再叠加任何源码补丁，纯上游构建。
+# 现行策略（2026-11-11 复核）：纯上游基线 + 两个可开关的上游定点修复。
+#   - 源码：pin 到 pbs05/ponwrt master HEAD（当前 d9dd3a49f7，内核 6.18.60）
+#   - feeds：跟随源码自带 feeds.conf.default（不钉版本，等同官方 CI）
+#   - 补丁：仅 947 SRAM 拥塞剖面（本脚本注入）与 949 MBI RX 溢出复位
+#     （feeds install 后由 scripts/apply-pon-driver-patches.sh 注入），
+#     两者都能通过 workflow_dispatch 关掉。不再叠加任何自创改法。
 #
-# 历史教训（为什么砍掉所有本地补丁）：
+# CVE-2026-98432（Linux 6.18.55，IPv4 TCP ireq_opt UAF，CVSS 9.8）：
+#   修复在 6.18.56，本线内核 6.18.60 已含。历史上的
+#   patches/kernel/960-CVE-2026-98432-*.patch、CVE_98432_FIX 开关、
+#   内核版本判断与源码断言、设备侧 nftables 缓解规则全部已删除；
+#   编译链路里不再有任何 CVE 相关脚本、配置或校验。不要回加。
+#
+# 历史教训（为什么不再自创补丁）：
 #   - run #23：本地 999 号 QoS 补丁被上游 925 补丁重新引入同一行而失效，
 #     编译 36 分钟后才被源码断言拦下。
 #   - run #36：组 ID 碰撞（hardware-support 撞钉死 feeds 的 sane-backends），
 #     本质是"钉死旧 feeds + 上游新增包"造成的，靠本地 sed 打补丁治标。
-#   - CVE 回移补丁需要随内核版本判断跳过，逻辑本身也在持续维护。
+#   - CVE 回移补丁需要随内核版本判断跳过，内核 bump 后成了纯负资产。
 #
-# 现行策略：
-#   - 源码：pin 到 pbs05/ponwrt master HEAD
-#   - feeds：跟随源码自带 feeds.conf.default（不钉版本，等同官方 CI）
-#   - 补丁：无。源码树一个字都不改。
-#
-# 已知代价（明确接受）：
-#   - CVE-2026-98432（Linux 6.18.55，IPv4 TCP ireq_opt UAF，CVSS 9.8）
-#     未回移。上游 bump 到 6.18.56 后自动消失。刷机前如需缓解，可在设备侧
-#     用 nftables 拦截带 IP Options 的入站 SYN。
-#   - lan2/lan3 QoS 通道卡 ~500 Mbps 的问题不再本地修正（上游 999 解）。
+# 其余已知项：
+#   - lan2/lan3 吞吐受 QDMA SRAM 动态阈值影响，由 947 本地修正（PR #64 未合并）。
 #   - lan1 2.5G 冷启动：上游 69cd3e269 已自修（10ms/20ms），无需本地改。
 #
 # PonWrt 的 feeds.conf.default 已自带 PON 驱动/用户态源，无需额外添加。
