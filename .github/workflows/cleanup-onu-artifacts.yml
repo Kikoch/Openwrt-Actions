@@ -1,0 +1,32 @@
+# 一次性清理任务：删掉已下线的 ONU 编译线遗留的两个固件 artifact。
+# 本机没有 GitHub API 凭据，借 runner 自带的 GITHUB_TOKEN 调删除接口。
+# 跑完即删本文件，不留长期 workflow。
+name: Cleanup ONU artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/cleanup-onu-artifacts.yml"
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Delete the two ONU firmware artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for id in 11707560390 11655930531; do
+            echo "deleting ONU artifact id=$id"
+            gh api --method DELETE "repos/$REPO/actions/artifacts/$id" \
+              -H "Accept: application/vnd.github+json"
+          done
+          echo "ONU artifacts deleted"
