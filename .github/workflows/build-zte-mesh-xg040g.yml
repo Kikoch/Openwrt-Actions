@@ -220,49 +220,69 @@ jobs:
     - name: Configure (040 线原配置 + zte-mesh 包)
       shell: bash
       run: |
-        set -euo pipefail
+        set -uo pipefail
         cd /workdir/openwrt
-        # 先用 040 线的原脚本组装完整配置 —— 内核选项与 16.1 现役固件一致，
-        # 这样现编的 kmod-veth vermagic / symbol CRC 才对得上。
-        GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CONFIG_FILE=ponwrt-extra.config \
-          bash "$GITHUB_WORKSPACE/ponwrt-diy-part2.sh"
+        LOG="$GITHUB_WORKSPACE/zte-mesh-config.log"
+        : > "$LOG"
+        esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
 
-        # 上面脚本已经跑过 make defconfig；追加包目标后再 defconfig 一次。
-        cat >> .config <<'EOF'
+        run_config() {
+          set -e
+          # 先用 040 线的原脚本组装完整配置 —— 内核选项与 16.1 现役固件一致，
+          # 这样现编的 kmod-veth vermagic / symbol CRC 才对得上。
+          GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CONFIG_FILE=ponwrt-extra.config \
+            bash "$GITHUB_WORKSPACE/ponwrt-diy-part2.sh"
+
+          # 上面脚本已经跑过 make defconfig；追加包目标后再 defconfig 一次。
+          cat >> .config <<'EOF'
         CONFIG_PACKAGE_zte-mesh=m
         CONFIG_PACKAGE_zte-mesh-launcher=m
         CONFIG_PACKAGE_luci-app-zte-mesh=m
         CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=m
         EOF
-        make defconfig
+          make defconfig
 
-        # luci.mk 的 i18n 是虚拟包，defconfig 可能把它静默删掉（run #16 教训）。
-        if grep -qs 'luci-i18n-zte-mesh-zh-cn' tmp/.config-package.in; then
-          if ! grep -q '^CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=' .config; then
-            printf 'CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=m\n' >> .config
-            echo "i18n 被 defconfig 丢掉，已补回"
+          # luci.mk 的 i18n 是虚拟包，defconfig 可能把它静默删掉（run #16 教训）。
+          if grep -qs 'luci-i18n-zte-mesh-zh-cn' tmp/.config-package.in; then
+            if ! grep -q '^CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=' .config; then
+              printf 'CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=m\n' >> .config
+              echo "i18n 被 defconfig 丢掉，已补回"
+            fi
+          else
+            echo "luci.mk 没生成 luci-i18n-zte-mesh-zh-cn 符号"
+            return 1
           fi
-        else
-          echo "::error::luci.mk 没生成 luci-i18n-zte-mesh-zh-cn 符号"; exit 1
-        fi
 
-        MISSING=""
-        for p in zte-mesh zte-mesh-launcher luci-app-zte-mesh \
-                 luci-i18n-zte-mesh-zh-cn kmod-veth kmod-sched-core; do
-          grep -qE "^CONFIG_PACKAGE_${p}=[my]" .config || MISSING="$MISSING $p"
-        done
-        if [ -n "$MISSING" ]; then
-          echo "::error::defconfig 后缺包:$MISSING"
-          grep -E '^CONFIG_PACKAGE_(zte|kmod-veth|kmod-sched|luci-i18n-zte)' .config || true
-          exit 1
-        fi
-        grep -E '^CONFIG_PACKAGE_(zte-mesh|zte-mesh-launcher|luci-app-zte-mesh|luci-i18n-zte-mesh-zh-cn|kmod-veth|kmod-sched-core)=' .config
+          MISSING=""
+          for p in zte-mesh zte-mesh-launcher luci-app-zte-mesh \
+                   luci-i18n-zte-mesh-zh-cn kmod-veth kmod-sched-core; do
+            grep -qE "^CONFIG_PACKAGE_${p}=[my]" .config || MISSING="$MISSING $p"
+          done
+          if [ -n "$MISSING" ]; then
+            echo "defconfig 后缺包:$MISSING"
+            grep -E '^CONFIG_PACKAGE_(zte|kmod-veth|kmod-sched|luci-i18n-zte)' .config || true
+            return 1
+          fi
+          grep -E '^CONFIG_PACKAGE_(zte-mesh|zte-mesh-launcher|luci-app-zte-mesh|luci-i18n-zte-mesh-zh-cn|kmod-veth|kmod-sched-core)=' .config
 
-        KVER="$(make kernelversion)"
-        echo "Kernel version: $KVER"
-        [ "$KVER" = "$EXPECT_KERNEL" ] || {
-          echo "::error::内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"; exit 1; }
-        echo "KERNEL_VERSION=$KVER" >> "$GITHUB_ENV"
+          KVER="$(make kernelversion)"
+          echo "Kernel version: $KVER"
+          if [ "$KVER" != "$EXPECT_KERNEL" ]; then
+            echo "内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"
+            return 1
+          fi
+          echo "KERNEL_VERSION=$KVER" >> "$GITHUB_ENV"
+        }
+
+        # 公开仓库只有 check-run 注解匿名可读（完整日志要 admin），失败时把
+        # 配置日志尾部抬成 ::error:: 注解，一次运行就能定位，不用猜。
+        if run_config 2>&1 | tee "$LOG"; then
+          exit 0
+        fi
+        NL=$'\n'
+        echo "::error::$(esc "配置阶段失败，日志尾部:${NL}$(tail -80 "$LOG")")"
+        echo "::error::$(esc "相关 config 符号:${NL}$(grep -E '^CONFIG_(PACKAGE_(zte|kmod-veth|kmod-sched)|TARGET_airoha|KERNEL_DEBUG)' .config | sort -u | head -40 || true)")"
+        exit 1
 
     - name: Build tools and toolchain
       shell: bash
@@ -446,6 +466,7 @@ jobs:
       with:
         name: zte-mesh-build-logs-${{ github.run_number }}
         path: |
+          zte-mesh-config.log
           kmod-build.log
           zte-mesh-build.log
         if-no-files-found: ignore
