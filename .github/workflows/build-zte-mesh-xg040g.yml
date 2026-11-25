@@ -231,6 +231,11 @@ jobs:
         if grep -q 'kmod-gpio-button-hotplug' "$TM" configs/an7581.config configs/release.config; then
           echo "::error::kmod-gpio-button-hotplug 未从构建树摘干净"; exit 1
         fi
+        # 即便 seed 清干净，package/kernel/linux/compile 的依赖图仍会扫到这个
+        # 独立包目录并把它编进来（run #6/#9 实测 failed to build）。本线只要
+        # veth，不刷固件，直接让构建树看不见它的 Makefile。
+        GP=package/kernel/gpio-button-hotplug/Makefile
+        if [ -f "$GP" ]; then mv "$GP" "$GP.disabled-by-zte-mesh"; fi
         echo "gpio-button-hotplug 已从本线构建图移除"
 
     - name: Configure (040 线原配置 + zte-mesh 包)
