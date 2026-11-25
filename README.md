@@ -34,17 +34,6 @@
 - **手动参数**: `source_ref`、`pin_feeds`、`skip_verify`、`mbi_fix`、`sram_fix`、`release`
 - **已验证**: XG-PON 光口、2.5G LAN（EN8811H）、PPPoE、低内存更新方案（`openclash_lowmem_update.sh`，每日 03:00 停服更新）
 
-### 3. Build ZTE Mesh APK for 16.1（独立安装包线）
-
-- **不改固件**：产物是 `zte-mesh-apk-xg040g-*` bundle，scp 到现有 16.1 后跑 `install-on-16.1.sh` 安装。
-- **源码**：PonWrt ref 运行时从线 1 的 `REPO_REF` 读取（保证 kmod 与 6.18.60 内核同版），zte-mesh ref 钉在 workflow 里。
-- **依赖处理**：16.1 实机缺 `kmod-veth` → 本线现编；`ip-full` / `kmod-sched-core` 已在机上，仍打进 bundle 兜底。
-- **为什么要真编内核**：`package/kernel/linux` 的 install 阶段要 `modules.builtin`，而它的依赖链会重跑 `target/linux/prepare` 把内核目录重铺——手工放占位文件必被删。kmod 的 modpost 还要按 `Module.symvers` 校验符号。所以先 `make target/linux/compile` 真编一次，再单独起一个 make 进程编 kmod。
-- **vermagic 覆写（必须）**：kmod 的 `EXTRA_DEPENDS` 是 `kernel (=6.18.60~<md5>-r1)`，md5 = `md5(grep '=[ym]' 内核 .config.set | sort)`。16.1 的内核是「没开 veth」的配置编的，本线为了拿 veth.ko 必须开 `CONFIG_VETH`，配置一变 md5 必变（实测 `~0bec026f…` vs 设备 `~c6936c59…`），apk 会直接拒装。两个 .ko 的 vermagic 字符串实测一致（`6.18.60 SMP mod_unload aarch64`），且 16.1 未开 `CONFIG_MODVERSIONS`（模块无 `__versions` 段），ABI 校验只剩 vermagic，所以按 `EXPECT_VERMAGIC` 覆盖 `.vermagic`，只纠正 apk 元数据。
-- **AArch32**：原厂 multiapd 是 ARM32，本机 `/proc/sys/abi/default` 缺失 → COMPAT 不可证。上游 apk 不带模拟器，本线把 aarch64 静态 `qemu-arm-static` 作为**可选文件**放进 bundle（init 会自动判定并使用），不塞进任何 apk。
-- **隔离**：独立 dispatch type / concurrency group / cache 前缀 / artifact 前缀，`push.paths` 只含本 workflow，改它不会拉起两条 3.5 小时的固件线。
-- **触发**：push 本 workflow 自动构建；手动 Run 可覆盖两个 ref 或选 `release: yes` 发 Release。
-
 ### 2. Build ImmortalWrt Cudy TR3000
 
 - 每日 05:30（北京）探测最新 `openwrt-YY.MM` 稳定分支，与 `cudy-tr3000.last-built-ref` 比对，**有新提交才编译**，成功后自动回写
@@ -55,6 +44,18 @@
 - **内置**: 中文 LuCI、zram-swap、adblock-fast 及依赖、QModem 套件（[FUjr/QModem](https://github.com/FUjr/QModem)，src-link 作 feed）、WireGuard
 - **已移除**: DDNS（luci-app-ddns / ddns-scripts*，2026-10-03）；OpenClash（2026-10-19 起不再编入固件，改走 `openclash_lowmem_update.sh` 独立更新方案，刷机后 `apk add` 单独安装）
 - **额外产物**: QModem 独立 apk（`QModem_apk_*` artifact，随 Release 发布），可在其它机器上 `apk add` 安装，不必重刷固件
+
+### 3. Build ZTE Mesh APK for 16.1（独立安装包线）
+
+- **不改固件**：产物是 `zte-mesh-apk-xg040g-*` bundle，scp 到现有 16.1 后跑 `install-on-16.1.sh` 安装。
+- **源码**：PonWrt ref 运行时从线 1 的 `REPO_REF` 读取（保证 kmod 与 6.18.60 内核同版），zte-mesh ref 钉在 workflow 里。
+- **依赖处理**：16.1 实机缺 `kmod-veth` → 本线现编；`ip-full` / `kmod-sched-core` 已在机上，仍打进 bundle 兜底。
+- **为什么要真编内核**：`package/kernel/linux` 的 install 阶段要 `modules.builtin`，而它的依赖链会重跑 `target/linux/prepare` 把内核目录重铺——手工放占位文件必被删。kmod 的 modpost 还要按 `Module.symvers` 校验符号。所以先 `make target/linux/compile` 真编一次，再单独起一个 make 进程编 kmod。
+- **vermagic 覆写（必须）**：kmod 的 `EXTRA_DEPENDS` 是 `kernel (=6.18.60~<md5>-r1)`，md5 = `md5(grep '=[ym]' 内核 .config.set | sort)`。16.1 的内核是「没开 veth」的配置编的，本线为了拿 veth.ko 必须开 `CONFIG_VETH`，配置一变 md5 必变（实测 `~0bec026f…` vs 设备 `~c6936c59…`），apk 会直接拒装。两个 .ko 的 vermagic 字符串实测一致（`6.18.60 SMP mod_unload aarch64`），且 16.1 未开 `CONFIG_MODVERSIONS`（模块无 `__versions` 段），ABI 校验只剩 vermagic，所以按 `EXPECT_VERMAGIC` 覆盖 `.vermagic`，只纠正 apk 元数据。
+- **AArch32（qemu 是必需项，不是可选）**：原厂 `multiapd` 是 ARM32，而 16.1 内核实测**不能** exec 32 位 ELF（`/proc/kallsyms` 里的 `compat_sys_*` 符号是误导——直接 exec 会 ENOEXEC，shell 当脚本读并报 `syntax error: unexpected word`，init 脚本用同一探针所以会判 `compat=0`）。上游 apk 不带模拟器，本线把 Debian bookworm 的 aarch64 静态 `qemu-arm-static` 放进 bundle，安装时拷到 `/usr/lib/zte-mesh/root/`（必须在私有根内，chroot 后才 exec），不塞进任何 apk。
+- **隔离**：独立 dispatch type / concurrency group / cache 前缀 / artifact 前缀，`push.paths` 只含本 workflow，改它不会拉起两条 3.5 小时的固件线。
+- **触发**：push 本 workflow 自动构建；手动 Run 可覆盖两个 ref 或选 `release: yes` 发 Release。
+- **已验证（2026-11-25）**：bundle `202611251858`（run #14）在 16.1 上 `apk add` 一次装成功，`zte-mesh` 服务 running、`zmesh0` attach 到 `br-lan`、`role=master`，原厂 32 位 daemon 经 qemu 常驻（`daemon_restarts=0`，两个 qemu 进程 RSS 约 35 MB）。尚未接入中兴子节点。
 
 ## 产物层校验（本仓库的关键机制）
 
