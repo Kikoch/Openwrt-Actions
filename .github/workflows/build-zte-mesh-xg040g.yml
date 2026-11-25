@@ -363,7 +363,13 @@ jobs:
         if ! make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee "$LOG"; then
           NL=$'\n'
           # 公开仓库只有注解匿名可读，失败摘要必须发 ::error:: 而不是只 echo。
-          echo "::error::$(esc "kmod 编译失败:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -40)")"
+          echo "::error::$(esc "kmod 编译失败摘要:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -40)")"
+          # 顶层只报 Error 2，真因在子 make 的几十行之前。串噪重跑一次 V=s
+          # 只用于诊断（缓存已在，秒级），把真正的 error 行抬成注解。
+          VERBOSE=/tmp/kmod-verbose.log
+          make -j1 V=s package/kernel/linux/compile >"$VERBOSE" 2>&1 || true
+          echo "::error::$(esc "kmod V=s 错误行:${NL}$(grep -aE 'Error [0-9]|error:|fatal|No such file|cannot find|undefined reference' "$VERBOSE" | sort -u | tail -40)")"
+          echo "::error::$(esc "kmod V=s 末尾:${NL}$(tail -40 "$VERBOSE")")"
           grep -nE 'ERROR:|error:|\*\*\* \[|No such file' "$LOG" | tail -30 || true
           tail -60 "$LOG"
           exit 1
