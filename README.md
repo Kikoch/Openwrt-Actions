@@ -39,6 +39,8 @@
 - **不改固件**：产物是 `zte-mesh-apk-xg040g-*` bundle，scp 到现有 16.1 后跑 `install-on-16.1.sh` 安装。
 - **源码**：PonWrt ref 运行时从线 1 的 `REPO_REF` 读取（保证 kmod 与 6.18.60 内核同版），zte-mesh ref 钉在 workflow 里。
 - **依赖处理**：16.1 实机缺 `kmod-veth` → 本线现编；`ip-full` / `kmod-sched-core` 已在机上，仍打进 bundle 兜底。
+- **为什么要真编内核**：`package/kernel/linux` 的 install 阶段要 `modules.builtin`，而它的依赖链会重跑 `target/linux/prepare` 把内核目录重铺——手工放占位文件必被删。kmod 的 modpost 还要按 `Module.symvers` 校验符号。所以先 `make target/linux/compile` 真编一次，再单独起一个 make 进程编 kmod。
+- **vermagic 覆写（必须）**：kmod 的 `EXTRA_DEPENDS` 是 `kernel (=6.18.60~<md5>-r1)`，md5 = `md5(grep '=[ym]' 内核 .config.set | sort)`。16.1 的内核是「没开 veth」的配置编的，本线为了拿 veth.ko 必须开 `CONFIG_VETH`，配置一变 md5 必变（实测 `~0bec026f…` vs 设备 `~c6936c59…`），apk 会直接拒装。两个 .ko 的 vermagic 字符串实测一致（`6.18.60 SMP mod_unload aarch64`），且 16.1 未开 `CONFIG_MODVERSIONS`（模块无 `__versions` 段），ABI 校验只剩 vermagic，所以按 `EXPECT_VERMAGIC` 覆盖 `.vermagic`，只纠正 apk 元数据。
 - **AArch32**：原厂 multiapd 是 ARM32，本机 `/proc/sys/abi/default` 缺失 → COMPAT 不可证。上游 apk 不带模拟器，本线把 aarch64 静态 `qemu-arm-static` 作为**可选文件**放进 bundle（init 会自动判定并使用），不塞进任何 apk。
 - **隔离**：独立 dispatch type / concurrency group / cache 前缀 / artifact 前缀，`push.paths` 只含本 workflow，改它不会拉起两条 3.5 小时的固件线。
 - **触发**：push 本 workflow 自动构建；手动 Run 可覆盖两个 ref 或选 `release: yes` 发 Release。
