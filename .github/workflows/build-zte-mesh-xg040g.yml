@@ -319,6 +319,13 @@ jobs:
       run: |
         set -euo pipefail
         cd /workdir/openwrt
+        # 缓存命中时 staging_dir/build_dir 已带上 tools/toolchain 的安装戳，
+        # 这两条命令即便 no-op 也要跑近 20 分钟的 prereq 检查，排障轮直接跳过。
+        if [ "${{ steps.cache.outputs.cache-hit }}" = "true" ]; then
+          echo "cache hit: tools/toolchain 已随缓存还原，跳过"
+          test -d staging_dir/host/bin || { echo "::error::缓存里没有 staging_dir/host"; exit 1; }
+          exit 0
+        fi
         time make -j"$(nproc)" tools/install
         time make -j"$(nproc)" toolchain/install
 
