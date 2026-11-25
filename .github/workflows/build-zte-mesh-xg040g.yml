@@ -217,6 +217,20 @@ jobs:
         fi
         echo "after:  $(grep 'DEPENDS:=' "$MK")"
 
+        # `make package/kernel/linux/compile` 会按依赖图把 target 默认包也编进来，
+        # 其中 kmod-gpio-button-hotplug 与本线要的 veth 无关，却在 run #6 失败
+        # （ERROR: package/kernel/gpio-button-hotplug failed to build）。本线只发
+        # 安装包、不刷固件，把它从构建树的 DEFAULT_PACKAGES 与 seed 里摘掉；
+        # 16.1 现成固件里的那份不受影响，kmod-veth 的 symbol CRC 也不依赖它。
+        TM=target/linux/airoha/Makefile
+        sed -i 's/[[:space:]]*kmod-gpio-button-hotplug//' "$TM"
+        sed -i -E '/^CONFIG_PACKAGE_kmod-gpio-button-hotplug=/d' \
+          configs/an7581.config configs/release.config
+        if grep -q 'kmod-gpio-button-hotplug' "$TM" configs/an7581.config configs/release.config; then
+          echo "::error::kmod-gpio-button-hotplug 未从构建树摘干净"; exit 1
+        fi
+        echo "gpio-button-hotplug 已从本线构建图移除"
+
     - name: Configure (040 线原配置 + zte-mesh 包)
       shell: bash
       run: |
