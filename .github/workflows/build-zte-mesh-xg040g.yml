@@ -265,8 +265,15 @@ jobs:
           fi
           grep -E '^CONFIG_PACKAGE_(zte-mesh|zte-mesh-launcher|luci-app-zte-mesh|luci-i18n-zte-mesh-zh-cn|kmod-veth|kmod-sched-core)=' .config
 
-          KVER="$(make kernelversion)"
-          echo "Kernel version: $KVER"
+          # 不要调 `make kernelversion`：本树里这个 target 在 -j 下必失败
+          # （run #3 实测：make -r kernelversion: build failed），而且它会把
+          # 几十行 prereq 检查混进命令替换，污染版本字符串。直接读源码里的
+          # kernel-<patchver> 文件，这就是 kmod 编出来时的 LINUX_VERSION。
+          KPATCH="$(awk -F'= ' '/^KERNEL_PATCHVER:=/ {print $2; exit}' target/linux/airoha/Makefile)"
+          KSUFFIX="$(awk -F'= ' -v k="$KPATCH" '$1 == ("LINUX_VERSION-" k) {print $2; exit}' \
+                     "target/linux/generic/kernel-$KPATCH")"
+          KVER="${KPATCH}${KSUFFIX}"
+          echo "Kernel version: $KVER (from target/linux/generic/kernel-$KPATCH)"
           if [ "$KVER" != "$EXPECT_KERNEL" ]; then
             echo "::error::内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"
             return 1
