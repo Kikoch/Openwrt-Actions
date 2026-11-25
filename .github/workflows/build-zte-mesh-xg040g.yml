@@ -348,11 +348,11 @@ jobs:
           /workdir/openwrt/.ccache
         key: zte-mesh-xg-${{ env.PONWRT_REF }}-${{ env.ZTE_MESH_REF }}
 
-    - name: Build kmod-veth / kmod-sched-core for 6.18.60
+    - name: Build kernel + kmod-veth for 6.18.60
       shell: bash
       env:
         CCACHE_DIR: /workdir/openwrt/.ccache
-        CCACHE_MAXSIZE: 1500M
+        CCACHE_MAXSIZE: 2500M
         CCACHE_COMPILERCHECK: content
       run: |
         set -euo pipefail
@@ -360,43 +360,77 @@ jobs:
         LOG="$GITHUB_WORKSPACE/kmod-build.log"
         : > "$LOG"
         esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
-        # package/kernel/linux 的 install 阶段要 $(LINUX_DIR)/modules.builtin，
-        # 但本步只编 kmod、不编完整内核（run #11 实测 install: cannot stat）。
-        # 与 cnjn/build-apk.yml 的处理一致：在已 prepare 的内核目录放两个空文件。
-        # 它们只供 kernel 元包 install 用，不进我们要的 zte-mesh bundle。
-        KDIR="$(find build_dir -maxdepth 3 -type d -name "linux-$KERNEL_VERSION" -print -quit)"
-        if [ -z "$KDIR" ]; then
-          make -j"$(nproc)" target/linux/prepare
-          KDIR="$(find build_dir -maxdepth 3 -type d -name "linux-$KERNEL_VERSION" -print -quit)"
-        fi
-        [ -n "$KDIR" ] || { echo "::error::找不到内核构建目录 linux-$KERNEL_VERSION"; exit 1; }
-        : > "$KDIR/modules.builtin"
-        : > "$KDIR/modules.builtin.modinfo"
-        echo "kernel placeholders: $KDIR/modules.builtin{,.modinfo}"
-
-        if ! make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee "$LOG"; then
+        fail() {
           NL=$'\n'
-          # 公开仓库只有注解匿名可读，失败摘要必须发 ::error:: 而不是只 echo。
-          echo "::error::$(esc "kmod 编译失败摘要:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -40)")"
-          # 顶层只报 Error 2，真因在子 make 的几十行之前。串噪重跑一次 V=s
-          # 只用于诊断（缓存已在，秒级），把真正的 error 行抬成注解。
-          VERBOSE=/tmp/kmod-verbose.log
-          make -j1 V=s package/kernel/linux/compile >"$VERBOSE" 2>&1 || true
-          echo "::error::$(esc "kmod V=s 错误行:${NL}$(grep -aE 'Error [0-9]|error:|fatal|No such file|cannot find|undefined reference' "$VERBOSE" | sort -u | tail -40)")"
-          echo "::error::$(esc "kmod V=s 末尾:${NL}$(tail -40 "$VERBOSE")")"
-          grep -nE 'ERROR:|error:|\*\*\* \[|No such file' "$LOG" | tail -30 || true
-          tail -60 "$LOG"
+          echo "::error::$(esc "kmod 构建失败:${NL}$(grep -avE '::warning::|%0A' "$LOG" | grep -aE 'Error [0-9]|error:|No such file|cannot |failed' | tail -25)")"
+          echo "::error::$(esc "日志末尾:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -25)")"
+          exit 1
+        }
+
+        # run #12 教训：先在 find 到的内核目录里放 modules.builtin 占位文件没用。
+        # `make package/kernel/linux/compile` 的依赖链会重新触发 target/linux/prepare，
+        # 把 linux-6.18.60 整目录 rm -rf 重铺，占位文件当场消失（install: cannot stat）。
+        # 而且 kmod 要装进 16.1，必须有 Module.symvers 里的 symbol CRC
+        # （CONFIG_MODVERSIONS），空占位文件给不了。所以老老实实真编一次内核。
+        echo "=== 1/3 target/linux/compile (kernel $KERNEL_VERSION) ==="
+        time make -j"$(nproc)" target/linux/compile 2>&1 | tee -a "$LOG" || fail
+
+        KD="build_dir/target-aarch64_cortex-a53_musl/linux-airoha_an7581/linux-$KERNEL_VERSION"
+        for f in modules.builtin Module.symvers; do
+          [ -s "$KD/$f" ] || {
+            echo "::error::内核编完仍缺 $KD/$f"
+            ls -l "$KD" | head -40
+            exit 1
+          }
+        done
+        echo "kernel ok: modules.builtin $(wc -l < "$KD/modules.builtin") 行 / Module.symvers $(wc -l < "$KD/Module.symvers") 行"
+
+        echo "=== 2/3 package/kmod-veth/compile ==="
+        if ! make -j"$(nproc)" package/kmod-veth/compile 2>&1 | tee -a "$LOG"; then
+          echo "按包名定位失败，回退整目录 package/kernel/linux/compile"
+          make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee -a "$LOG" || fail
+        fi
+
+        echo "=== 3/3 校验产物 ==="
+        PKG="$(find bin -name 'kmod-veth-*.apk' -print -quit)"
+        if [ -z "$PKG" ]; then
+          echo "::error::没产出 kmod-veth apk"
+          find bin -name 'kmod-*.apk' | head -20 || true
           exit 1
         fi
-        # kmod-veth 在 .config 里是 =m，必须产出 apk；kmod-sched-core 在 040 线
-        # 基线里是 =y（编进内核，16.1 现机也已装），本来就不会有 apk，别误判。
-        find bin -name 'kmod-veth-*.apk' -print -quit | grep -q . || {
-          echo "::error::没产出 kmod-veth apk"; exit 1; }
+        echo "kmod-veth apk: $PKG"
+
+        KO="$(find build_dir -name 'veth.ko' -print -quit)"
+        if [ -n "$KO" ]; then
+          VM="$(strings "$KO" | grep -m1 '^vermagic=' || true)"
+          echo "veth.ko vermagic: ${VM:-未找到}"
+          case "$VM" in
+            "vermagic=$KERNEL_VERSION "*) echo "vermagic 与 16.1 现役内核 $KERNEL_VERSION 同版" ;;
+            *) echo "::warning::vermagic 与 $KERNEL_VERSION 不一致，装机前必须复核" ;;
+          esac
+        fi
+
+        # kmod-sched-core 在 040 线基线里是 =y（编进内核，16.1 现机也已装），
+        # 本来就不会有独立 apk，别误判成失败。
         if find bin -name 'kmod-sched-core-*.apk' -print -quit | grep -q .; then
           echo "kmod-sched-core apk: 已产出（可选）"
         else
-          echo "kmod-sched-core: CONFIG_PACKAGE_kmod-sched-core=y，已编进内核，无独立 apk（符合预期）"
+          echo "kmod-sched-core: 已编进内核（=y），无独立 apk，符合预期"
         fi
+
+    - name: Save kernel cache
+      # 上面那次 early save 发生在内核编译之前，内核对象永远进不了缓存。
+      # 这里再存一次，key 带 -kernel 后缀；restore-keys 前缀能命中较新的一份。
+      if: always()
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /workdir/openwrt/dl
+          /workdir/openwrt/staging_dir
+          /workdir/openwrt/build_dir
+          /workdir/openwrt/.ccache
+        key: zte-mesh-xg-${{ env.PONWRT_REF }}-${{ env.ZTE_MESH_REF }}-kernel
 
     - name: Build zte-mesh packages
       shell: bash
