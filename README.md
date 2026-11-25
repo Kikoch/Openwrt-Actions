@@ -4,16 +4,17 @@
 > Cloud-build OpenWrt / ImmortalWrt / PonWrt firmware with GitHub Actions: pinned source, artifact-level verification before release. Targets Nokia XG-040G-MD (Airoha AN7581 XG-PON) and Cudy TR3000 (MT7981).
 
 基于 GitHub Actions 云编译固件（模板来自 [P3TERX/Actions-OpenWrt](https://github.com/P3TERX/Actions-OpenWrt)）。
-同一仓库维护**两条独立的编译线**，共用一套产物层校验脚本。
+同一仓库维护**两条固件编译线 + 一条独立安装包线**，产物层校验脚本按线隔离。
 
 设计原则：**源码定版、产物先校验后发布。** 编译成功不等于固件能用 —— `.config` 看着对，产物里可能根本没有目标设备的镜像。
 
-## 两条编译线
+## 编译线
 
 | # | Workflow | 设备 / SoC | 源码 | 状态 |
 |---|----------|-----------|------|------|
 | 1 | `build-ponwrt-xg040g.yml` | Nokia XG-040G-MD (UBI) / Airoha AN7581 | [pbs05/ponwrt](https://github.com/pbs05/ponwrt)，`REPO_REF` 由看门狗跟随 master HEAD 自动抬升（当前 `d9dd3a49f7`） | 主力，保留 XG-PON 光口 |
 | 2 | `build-immortalwrt-cudy-tr3000.yml` | Cudy TR3000 / MT7981B | ImmortalWrt 稳定分支（自动探测 + 增量编译） | 日常使用，含 QModem 套件 |
+| 3 | `build-zte-mesh-xg040g.yml` | 16.1 / XG-040G-MD（**不刷固件**） | [cnjn/zte-mesh](https://github.com/cnjn/zte-mesh) + 与线 1 同源的 PonWrt | 独立安装包：4 个 zte-mesh apk + kmod-veth + 可选 qemu-arm-static |
 
 > 已删除的实验线：原「Build ImmortalWrt XG-040G-MD」（DTS / 内核补丁需持续 rebase）与
 > 「ONU 线」（`naoki66/ImmortalWrt-for-Gemtek-brightspeed` + `luci-app-onu`，2026-10-09 建、
@@ -32,6 +33,15 @@
 - **自动编译**: `auto-build-ponwrt.yml` 每 6 小时比对上游 HEAD，有更新才抬 pin 并触发构建；`force=yes` 可无条件构建一次。
 - **手动参数**: `source_ref`、`pin_feeds`、`skip_verify`、`mbi_fix`、`sram_fix`、`release`
 - **已验证**: XG-PON 光口、2.5G LAN（EN8811H）、PPPoE、低内存更新方案（`openclash_lowmem_update.sh`，每日 03:00 停服更新）
+
+### 3. Build ZTE Mesh APK for 16.1（独立安装包线）
+
+- **不改固件**：产物是 `zte-mesh-apk-xg040g-*` bundle，scp 到现有 16.1 后跑 `install-on-16.1.sh` 安装。
+- **源码**：PonWrt ref 运行时从线 1 的 `REPO_REF` 读取（保证 kmod 与 6.18.60 内核同版），zte-mesh ref 钉在 workflow 里。
+- **依赖处理**：16.1 实机缺 `kmod-veth` → 本线现编；`ip-full` / `kmod-sched-core` 已在机上，仍打进 bundle 兜底。
+- **AArch32**：原厂 multiapd 是 ARM32，本机 `/proc/sys/abi/default` 缺失 → COMPAT 不可证。上游 apk 不带模拟器，本线把 aarch64 静态 `qemu-arm-static` 作为**可选文件**放进 bundle（init 会自动判定并使用），不塞进任何 apk。
+- **隔离**：独立 dispatch type / concurrency group / cache 前缀 / artifact 前缀，`push.paths` 只含本 workflow，改它不会拉起两条 3.5 小时的固件线。
+- **触发**：push 本 workflow 自动构建；手动 Run 可覆盖两个 ref 或选 `release: yes` 发 Release。
 
 ### 2. Build ImmortalWrt Cudy TR3000
 
@@ -88,6 +98,7 @@
 │   ├── build-ponwrt-xg040g.yml            # 线 1: PonWrt XG-040G-MD
 │   ├── auto-build-ponwrt.yml              # 线 1: 上游更新看门狗 (每 6h)
 │   ├── build-immortalwrt-cudy-tr3000.yml  # 线 2: Cudy TR3000 (自动增量)
+│   ├── build-zte-mesh-xg040g.yml          # 线 3: 16.1 独立安装包 (不刷固件)
 │   └── publish-artifacts-to-release.yml   # 手动发布产物到 Release
 ├── scripts/
 │   ├── verify-firmware.sh                 # 产物层校验 + 归档 (共用实现, 不进任何 paths)

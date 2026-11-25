@@ -1,0 +1,468 @@
+#=================================================
+# Build ZTE Mesh APK bundle for 16.1 (Nokia XG-040G-MD)
+#
+# 在 040 线（PonWrt XG-040G-MD）旁边增加的一条**独立安装包线**：
+# 不动固件镜像，只编译 cnjn/zte-mesh 的四个 apk + 16.1 缺的内核模块 + ARM32
+# 模拟器，产物是可直接 scp 到现有 16.1 设备、apk add 安装的安装包集合。
+#
+# 与 040 线的隔离（参照 2026-10-09 两条线互相触发的教训）：
+#   - 独立 dispatch type: build-zte-mesh（040 线只听 build-ponwrt）
+#   - 独立 concurrency group
+#   - 独立 cache key 前缀 zte-mesh-xg-
+#   - push.paths 只列本文件；共用脚本一个都不进 paths
+#   - artifact / Release 前缀 ZteMesh / zte-mesh-apk-xg040g
+#
+# 为什么要额外编 kmod-veth 和塞 qemu-arm-static（2026-11-25 实机只读探测）：
+#   - 16.1 当前固件 r0+43241-d9dd3a49f7 / kernel 6.18.60 / aarch64_cortex-a53；
+#     /sys/module/veth 不存在、/lib/modules 里无 veth.ko -> zte-mesh 的 ns-run
+#     建私有 veth 对会 errno=2，必须现编同内核 kmod-veth。
+#   - /proc/sys/abi 下没有 default，/proc/config.gz 不可读 -> CONFIG_COMPAT
+#     不可证；原厂 multiapd 是 ARM32 ELF，走不通就 execv errno=8。上游包刻意
+#     不带模拟器，这里把 aarch64 静态 qemu-arm-static 作为**可选附加文件**
+#     放进 bundle，由收件人自己决定是否拷进私有根。
+#
+# 源码 pin：PonWrt ref 每次从 040 线的 build-ponwrt-xg040g.yml 读取，
+# 保证 kmod 与 16.1 现役内核同版；zte-mesh ref 钉在本文件 env。
+#=================================================
+
+name: Build ZTE Mesh APK for XG-040G-MD
+
+on:
+  repository_dispatch:
+    types: [build-zte-mesh]
+  workflow_dispatch:
+    inputs:
+      ponwrt_ref:
+        description: "PonWrt 源码 ref（留空=沿用 040 线 REPO_REF，推荐）"
+        required: false
+        default: ""
+      zte_mesh_ref:
+        description: "cnjn/zte-mesh ref（留空=用本文件固定 pin）"
+        required: false
+        default: ""
+      release:
+        description: "成功后创建 Release（yes/no）"
+        required: false
+        default: "no"
+        type: choice
+        options:
+          - "no"
+          - "yes"
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      # 只放本线专属文件。共用脚本（verify-firmware.sh 等）绝不进 paths。
+      - ".github/workflows/build-zte-mesh-xg040g.yml"
+
+env:
+  PONWRT_REPO: https://github.com/pbs05/ponwrt
+  ZTE_MESH_REPO: https://github.com/cnjn/zte-mesh
+  # cnjn/zte-mesh main @ 2026-10-31（Merge PR #2 child-node）
+  ZTE_MESH_REF: 0df93c7f4255462b47aee233e7c9683f650a6fe9
+  # aarch64 静态 qemu-arm-static；仅作为可选附加文件，不进任何 apk。
+  QEMU_DEB_URL: https://deb.debian.org/debian/pool/main/q/qemu/qemu-user-static_7.2+dfsg-7+deb12u18+b3_arm64.deb
+  EXPECT_DEVICE: nokia_xg-040g-md-ubi
+  EXPECT_KERNEL: "6.18.60"
+  TZ: Asia/Shanghai
+
+permissions:
+  contents: write
+
+concurrency:
+  group: zte-mesh-xg-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ${{ vars.PONWRT_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 240
+    if: >-
+      github.event_name != 'push' ||
+      github.event.repository.owner.id == github.event.sender.id
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v5
+
+    - name: Resolve source refs
+      shell: bash
+      run: |
+        set -euo pipefail
+        P="${{ github.event.inputs.ponwrt_ref }}"
+        if [ -z "$P" ]; then
+          # 单一真源：看门狗抬 040 线 pin 时本线自动跟着走，不用两处同步。
+          P="$(awk '/^[[:space:]]*REPO_REF:/ {print $2; exit}' \
+                .github/workflows/build-ponwrt-xg040g.yml)"
+        fi
+        [ -n "$P" ] || { echo "::error::无法从 040 线 workflow 读到 REPO_REF"; exit 1; }
+        Z="${{ github.event.inputs.zte_mesh_ref }}"
+        [ -n "$Z" ] || Z="$ZTE_MESH_REF"
+        echo "PONWRT_REF=$P" >> "$GITHUB_ENV"
+        echo "ZTE_MESH_REF=$Z" >> "$GITHUB_ENV"
+        echo "PonWrt ref: $P"
+        echo "zte-mesh ref: $Z"
+
+    - name: Free build space
+      run: |
+        df -hT /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /usr/share/swift /opt/hostedtoolcache /usr/local/share/boost \
+                    /opt/az /usr/local/.ghcup
+        sudo apt-get clean
+        sudo docker image prune -af >/dev/null 2>&1 || true
+        df -hT /
+
+    - name: Install host dependencies
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends \
+          asciidoc autoconf automake autopoint binutils bison build-essential \
+          bzip2 ccache cmake cpio curl device-tree-compiler dpkg fakeroot file \
+          flex gawk gettext git g++-multilib gcc-multilib gperf help2man \
+          intltool libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+          libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+          libtool libyaml-dev lld llvm lua5.1 liblua5.1-0-dev meson \
+          ninja-build patch pkgconf python3 python3-docutils python3-pip \
+          python3-ply python3-pyelftools re2c rsync scons swig texinfo \
+          uglifyjs unzip wget xmlto xxd xz-utils zlib1g-dev zstd
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Clone PonWrt and zte-mesh (pinned)
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo mkdir -p /workdir
+        sudo chown "$USER:$GROUPS" /workdir
+
+        git init -q /workdir/openwrt
+        git -C /workdir/openwrt remote add origin "$PONWRT_REPO"
+        git -C /workdir/openwrt fetch -q --depth 1 origin "$PONWRT_REF"
+        git -C /workdir/openwrt checkout -q FETCH_HEAD
+
+        git init -q /workdir/zte-mesh
+        git -C /workdir/zte-mesh remote add origin "$ZTE_MESH_REPO"
+        git -C /workdir/zte-mesh fetch -q --depth 1 origin "$ZTE_MESH_REF"
+        git -C /workdir/zte-mesh checkout -q FETCH_HEAD
+
+        grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL) =' /workdir/openwrt/include/version.mk 2>/dev/null || true
+        echo "PonWrt: $(git -C /workdir/openwrt rev-parse HEAD)"
+        echo "zte-mesh: $(git -C /workdir/zte-mesh rev-parse HEAD)"
+        test -f /workdir/zte-mesh/openwrt/zte-mesh/zte-mesh-runtime.tar.gz || {
+          echo "::error::zte-mesh 运行包 tarball 缺失"; exit 1; }
+
+    - name: Restore build cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          /workdir/openwrt/dl
+          /workdir/openwrt/staging_dir
+          /workdir/openwrt/build_dir
+          /workdir/openwrt/.ccache
+        key: zte-mesh-xg-${{ env.PONWRT_REF }}-${{ env.ZTE_MESH_REF }}
+        restore-keys: |
+          zte-mesh-xg-${{ env.PONWRT_REF }}-
+          zte-mesh-xg-
+
+    - name: Apply 947 kernel patch (same as 040 line)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        WITH_SRAM_FIX=1 GITHUB_WORKSPACE="$GITHUB_WORKSPACE" \
+          bash "$GITHUB_WORKSPACE/ponwrt-diy-part1.sh"
+        ls -1 target/linux/airoha/patches-6.18/947-*
+
+    - name: Install feeds (040 线 feeds + zte_mesh src-link)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        grep -vE '^[[:space:]]*src-(git|link|cdns|hg|svn|bzr)[[:space:]]+zte_mesh([[:space:]]|$)' \
+          feeds.conf.default > feeds.conf
+        printf 'src-link zte_mesh /workdir/zte-mesh/openwrt\n' >> feeds.conf
+        cat feeds.conf
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
+        for p in zte-mesh zte-mesh-launcher luci-app-zte-mesh; do
+          test -f "package/feeds/zte_mesh/$p/Makefile" || {
+            echo "::error::zte_mesh feed 未链接: $p"; exit 1; }
+        done
+        echo "feeds ok: $(ls package/feeds | tr '\n' ' ')"
+
+    - name: Adapt launcher package for airoha / 16.1
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        MK=package/feeds/zte_mesh/zte-mesh-launcher/Makefile
+        echo "before: $(grep 'DEPENDS:=' "$MK")"
+        # 上游只放行 zte / qualcommax；16.1 是 TARGET_airoha，不加这道门
+        # defconfig 会静默丢掉 CONFIG_PACKAGE_zte-mesh-launcher。
+        sed -i 's/@(TARGET_zte||TARGET_qualcommax)/@(TARGET_airoha||TARGET_zte||TARGET_qualcommax)/' "$MK"
+        grep -q 'TARGET_airoha' "$MK" || { echo "::error::TARGET_airoha 门未加上"; exit 1; }
+
+        # 16.1 实机已装 ip-full（apk db 实读），从构建树依赖里摘掉只是为了
+        # 不去 kernel.org / netfilter.org 拉 iproute2+iptables（常年 403）。
+        # kmod-veth / kmod-sched-core 必须留：本线要现编 kmod-veth。
+        sed -i -E 's/[[:space:]]*\+ip-full//g' "$MK"
+        grep -q '+kmod-veth' "$MK" && grep -q '+kmod-sched-core' "$MK" || {
+          echo "::error::kmod 依赖被误删"; exit 1; }
+        if grep -q '+ip-full' "$MK"; then
+          echo "::error::+ip-full 未摘干净"; exit 1;
+        fi
+        echo "after:  $(grep 'DEPENDS:=' "$MK")"
+
+    - name: Configure (040 线原配置 + zte-mesh 包)
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        # 先用 040 线的原脚本组装完整配置 —— 内核选项与 16.1 现役固件一致，
+        # 这样现编的 kmod-veth vermagic / symbol CRC 才对得上。
+        GITHUB_WORKSPACE="$GITHUB_WORKSPACE" CONFIG_FILE=ponwrt-extra.config \
+          bash "$GITHUB_WORKSPACE/ponwrt-diy-part2.sh"
+
+        # 上面脚本已经跑过 make defconfig；追加包目标后再 defconfig 一次。
+        cat >> .config <<'EOF'
+        CONFIG_PACKAGE_zte-mesh=m
+        CONFIG_PACKAGE_zte-mesh-launcher=m
+        CONFIG_PACKAGE_luci-app-zte-mesh=m
+        CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=m
+        EOF
+        make defconfig
+
+        # luci.mk 的 i18n 是虚拟包，defconfig 可能把它静默删掉（run #16 教训）。
+        if grep -qs 'luci-i18n-zte-mesh-zh-cn' tmp/.config-package.in; then
+          if ! grep -q '^CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=' .config; then
+            printf 'CONFIG_PACKAGE_luci-i18n-zte-mesh-zh-cn=m\n' >> .config
+            echo "i18n 被 defconfig 丢掉，已补回"
+          fi
+        else
+          echo "::error::luci.mk 没生成 luci-i18n-zte-mesh-zh-cn 符号"; exit 1
+        fi
+
+        MISSING=""
+        for p in zte-mesh zte-mesh-launcher luci-app-zte-mesh \
+                 luci-i18n-zte-mesh-zh-cn kmod-veth kmod-sched-core; do
+          grep -qE "^CONFIG_PACKAGE_${p}=[my]" .config || MISSING="$MISSING $p"
+        done
+        if [ -n "$MISSING" ]; then
+          echo "::error::defconfig 后缺包:$MISSING"
+          grep -E '^CONFIG_PACKAGE_(zte|kmod-veth|kmod-sched|luci-i18n-zte)' .config || true
+          exit 1
+        fi
+        grep -E '^CONFIG_PACKAGE_(zte-mesh|zte-mesh-launcher|luci-app-zte-mesh|luci-i18n-zte-mesh-zh-cn|kmod-veth|kmod-sched-core)=' .config
+
+        KVER="$(make kernelversion)"
+        echo "Kernel version: $KVER"
+        [ "$KVER" = "$EXPECT_KERNEL" ] || {
+          echo "::error::内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"; exit 1; }
+        echo "KERNEL_VERSION=$KVER" >> "$GITHUB_ENV"
+
+    - name: Build tools and toolchain
+      shell: bash
+      env:
+        CCACHE_DIR: /workdir/openwrt/.ccache
+        CCACHE_MAXSIZE: 1500M
+        CCACHE_COMPILERCHECK: content
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        time make -j"$(nproc)" tools/install
+        time make -j"$(nproc)" toolchain/install
+
+    - name: Save build cache
+      # 工具链一旦就绪就立刻存：后面包编译失败时 actions/cache 的 post 步骤
+      # 会因 success() 为假把 40 分钟的工具链白扔掉（2026-10 踩过）。
+      if: success() && steps.cache.outputs.cache-hit != 'true'
+      continue-on-error: true
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          /workdir/openwrt/dl
+          /workdir/openwrt/staging_dir
+          /workdir/openwrt/build_dir
+          /workdir/openwrt/.ccache
+        key: zte-mesh-xg-${{ env.PONWRT_REF }}-${{ env.ZTE_MESH_REF }}
+
+    - name: Build kmod-veth / kmod-sched-core for 6.18.60
+      shell: bash
+      env:
+        CCACHE_DIR: /workdir/openwrt/.ccache
+        CCACHE_MAXSIZE: 1500M
+        CCACHE_COMPILERCHECK: content
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        LOG="$GITHUB_WORKSPACE/kmod-build.log"
+        : > "$LOG"
+        if ! make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee "$LOG"; then
+          grep -nE 'ERROR:|error:|\*\*\* \[|No such file' "$LOG" | tail -30 || true
+          tail -60 "$LOG"
+          exit 1
+        fi
+        for stem in kmod-veth kmod-sched-core; do
+          find bin -name "${stem}-*.apk" -print -quit | grep -q . || {
+            echo "::error::没产出 $stem apk"; exit 1; }
+        done
+
+    - name: Build zte-mesh packages
+      shell: bash
+      env:
+        CCACHE_DIR: /workdir/openwrt/.ccache
+        CCACHE_MAXSIZE: 1500M
+        CCACHE_COMPILERCHECK: content
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        LOG="$GITHUB_WORKSPACE/zte-mesh-build.log"
+        : > "$LOG"
+        fail() {
+          { echo "## FAILED: $1"; echo '```';
+            grep -nE 'ERROR:|error:|\*\*\* \[|No such file|cannot find' "$LOG" | tail -30 || true
+            echo '```'; echo '### last 40 lines'; echo '```'; tail -40 "$LOG"; echo '```';
+          } > failure.txt
+          cat failure.txt
+          if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then cat failure.txt >> "$GITHUB_STEP_SUMMARY"; fi
+          exit 1
+        }
+        build() {
+          echo "=== make $1 ===" | tee -a "$LOG"
+          make -j"$(nproc)" V=s "$1" >>"$LOG" 2>&1 || fail "$1"
+        }
+        # kernel.org / netfilter.org 会间歇 403，luci-base 先带重试预热 dl/。
+        for i in 1 2 3; do
+          make -j"$(nproc)" package/feeds/luci/luci-base/download >>"$LOG" 2>&1 && break
+          echo "luci-base/download 第 $i 次失败，重试"
+          [ "$i" -eq 3 ] && fail "luci-base/download"
+        done
+        build package/feeds/luci/luci-base/compile
+        build package/feeds/zte_mesh/zte-mesh/compile
+        build package/feeds/zte_mesh/zte-mesh-launcher/compile
+        build package/feeds/zte_mesh/luci-app-zte-mesh/compile
+
+        for pat in 'zte-mesh-[0-9]*.apk' 'zte-mesh-launcher-*.apk' \
+                   'luci-app-zte-mesh-*.apk' 'luci-i18n-zte-mesh-zh-cn-*.apk'; do
+          find bin -name "$pat" -print -quit | grep -q . || {
+            echo "::error::没产出匹配 $pat 的 apk"; exit 1; }
+        done
+        echo "zte-mesh apks:"
+        find bin -name '*.apk' | grep -E '(zte-mesh|kmod-veth|kmod-sched-core)' || true
+
+    - name: Collect and package bundle
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd /workdir/openwrt
+        FILE_DATE="$(date +%Y%m%d%H%M)"
+        echo "FILE_DATE=$FILE_DATE" >> "$GITHUB_ENV"
+        mkdir -p dist
+
+        find bin -name 'zte-mesh-[0-9]*.apk'            -exec cp -f {} dist/ \;
+        find bin -name 'zte-mesh-launcher-*.apk'        -exec cp -f {} dist/ \;
+        find bin -name 'luci-app-zte-mesh-*.apk'        -exec cp -f {} dist/ \;
+        find bin -name 'luci-i18n-zte-mesh-zh-cn-*.apk' -exec cp -f {} dist/ \;
+        find bin -name 'kmod-veth-*.apk'                -exec cp -f {} dist/ \;
+        find bin -name 'kmod-sched-core-*.apk'          -exec cp -f {} dist/ \;
+
+        # 可选 ARM32 模拟器：上游 apk 不含它，16.1 内核 CONFIG_COMPAT 不可证，
+        # 这里作为独立文件随包给，不塞进任何 apk，收件人自己决定是否安装。
+        curl -fL --retry 3 --connect-timeout 20 "$QEMU_DEB_URL" -o /tmp/qemu-user-static.deb
+        mkdir -p /tmp/qemu-root
+        dpkg-deb -x /tmp/qemu-user-static.deb /tmp/qemu-root
+        Q=/tmp/qemu-root/usr/bin/qemu-arm-static
+        [ -x "$Q" ] || { echo "::error::deb 里没有 qemu-arm-static"; exit 1; }
+        cp "$Q" dist/qemu-arm-static
+        chmod 755 dist/qemu-arm-static
+        file dist/qemu-arm-static | grep -q 'ARM aarch64' || {
+          echo "::error::qemu-arm-static 不是 aarch64 版本"; exit 1; }
+
+        cat > dist/install-on-16.1.sh <<'EOF'
+        #!/bin/sh
+        # 在 16.1（PonWrt / aarch64_cortex-a53）上执行：cd 到本目录后 sh install-on-16.1.sh
+        # 只读预检：uname -m / apk list -I | grep ip-full / ubus call luci.zte-mesh status
+        set -eu
+        cd "$(dirname "$0")"
+        echo "== 安装的 apk =="
+        ls -1 *.apk
+        apk add --allow-untrusted \
+          ./zte-mesh-[0-9]*.apk \
+          ./zte-mesh-launcher-*.apk \
+          ./luci-app-zte-mesh-*.apk \
+          ./luci-i18n-zte-mesh-zh-cn-*.apk \
+          ./kmod-veth-*.apk \
+          ./kmod-sched-core-*.apk
+
+        # init 脚本按 /proc/config.gz + 32 位 loader 自动判 COMPAT；判失败才用模拟器。
+        # 模拟器必须放在 chroot 内的私有根里，路径不能改。
+        install -m 755 qemu-arm-static /usr/lib/zte-mesh/root/qemu-arm-static
+
+        # master = 只当主控、不动本机 Wi-Fi（16.1 没有射频，必须用 master）。
+        uci -q set zte_mesh.main.mesh_role=master
+        uci -q set zte_mesh.main.bridge=br-lan
+        uci commit zte_mesh
+        /etc/init.d/zte-mesh enable
+        /etc/init.d/zte-mesh restart
+        echo "== 状态 =="
+        ubus call luci.zte-mesh status || true
+        echo "日志: logread -e zte-mesh | tail -50"
+        echo "注意: /etc/config/zte_mesh 里有默认 Wi-Fi 名称与密钥，上线前改掉。"
+        EOF
+        chmod 755 dist/install-on-16.1.sh
+
+        cat > dist/build-info.txt <<EOF
+        bundle: zte-mesh-apk-xg040g-$FILE_DATE
+        build time (UTC): $(date -u '+%Y-%m-%dT%H:%M:%SZ')
+        target: airoha/an7581, device $EXPECT_DEVICE
+        kernel: $KERNEL_VERSION (same source pin as 040 line)
+        PonWrt source: $PONWRT_REPO @ $PONWRT_REF
+        zte-mesh source: $ZTE_MESH_REPO @ $ZTE_MESH_REF
+        qemu-arm-static: Debian bookworm qemu-user-static 7.2+dfsg-7+deb12u18+b3 (arm64), GPL-2.0
+        baseline probed on 16.1 (2026-11-25, read-only):
+          PonWrt SNAPSHOT r0+43241-d9dd3a49f7 / 6.18.60 / aarch64_cortex-a53
+          ip-full installed; kmod-sched-core installed; kmod-veth ABSENT
+          /proc/sys/abi/default absent -> AArch32 uncertain; qemu included as opt-in file
+        local patches applied: 947 SRAM fix (same as 040 line); launcher DEPENDS +TARGET_airoha, -ip-full
+        note: apks are unsigned -> apk add --allow-untrusted
+        EOF
+        (cd dist && sha256sum * > SHA256SUMS)
+        ls -lh dist
+
+    - name: Upload bundle
+      uses: actions/upload-artifact@v5
+      with:
+        name: zte-mesh-apk-xg040g-${{ env.FILE_DATE }}
+        path: /workdir/openwrt/dist/
+        if-no-files-found: error
+
+    - name: Upload build logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: zte-mesh-build-logs-${{ github.run_number }}
+        path: |
+          kmod-build.log
+          zte-mesh-build.log
+        if-no-files-found: ignore
+
+    - name: Create release
+      if: github.event.inputs.release == 'yes' && success()
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ZteMesh_xg040g_${{ env.FILE_DATE }}
+        name: ZTE Mesh 安装包 for 16.1 - ${{ env.FILE_DATE }}
+        files: /workdir/openwrt/dist/*
+        body: |
+          ZTE Mesh 独立安装包（不刷固件，装进现有 16.1 / XG-040G-MD）
+
+          PonWrt @ ${{ env.PONWRT_REF }}（kernel ${{ env.KERNEL_VERSION }}，与 040 线同源）
+          zte-mesh @ ${{ env.ZTE_MESH_REF }}
+          含四个 apk + kmod-veth + kmod-sched-core + 可选 qemu-arm-static + 安装脚本。
+          apk 未签名，用 `sh install-on-16.1.sh` 或 `apk add --allow-untrusted`。
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
