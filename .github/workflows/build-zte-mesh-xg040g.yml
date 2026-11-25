@@ -331,15 +331,24 @@ jobs:
         cd /workdir/openwrt
         LOG="$GITHUB_WORKSPACE/kmod-build.log"
         : > "$LOG"
+        esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
         if ! make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee "$LOG"; then
+          NL=$'\n'
+          # 公开仓库只有注解匿名可读，失败摘要必须发 ::error:: 而不是只 echo。
+          echo "::error::$(esc "kmod 编译失败:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -40)")"
           grep -nE 'ERROR:|error:|\*\*\* \[|No such file' "$LOG" | tail -30 || true
           tail -60 "$LOG"
           exit 1
         fi
-        for stem in kmod-veth kmod-sched-core; do
-          find bin -name "${stem}-*.apk" -print -quit | grep -q . || {
-            echo "::error::没产出 $stem apk"; exit 1; }
-        done
+        # kmod-veth 在 .config 里是 =m，必须产出 apk；kmod-sched-core 在 040 线
+        # 基线里是 =y（编进内核，16.1 现机也已装），本来就不会有 apk，别误判。
+        find bin -name 'kmod-veth-*.apk' -print -quit | grep -q . || {
+          echo "::error::没产出 kmod-veth apk"; exit 1; }
+        if find bin -name 'kmod-sched-core-*.apk' -print -quit | grep -q .; then
+          echo "kmod-sched-core apk: 已产出（可选）"
+        else
+          echo "kmod-sched-core: CONFIG_PACKAGE_kmod-sched-core=y，已编进内核，无独立 apk（符合预期）"
+        fi
 
     - name: Build zte-mesh packages
       shell: bash
@@ -425,8 +434,8 @@ jobs:
           ./zte-mesh-launcher-*.apk \
           ./luci-app-zte-mesh-*.apk \
           ./luci-i18n-zte-mesh-zh-cn-*.apk \
-          ./kmod-veth-*.apk \
-          ./kmod-sched-core-*.apk
+          ./kmod-veth-*.apk
+        # kmod-sched-core 在 040 线基线里是 =y（编进内核），16.1 现机已装，无需 apk。
 
         # init 脚本按 /proc/config.gz + 32 位 loader 自动判 COMPAT；判失败才用模拟器。
         # 模拟器必须放在 chroot 内的私有根里，路径不能改。
