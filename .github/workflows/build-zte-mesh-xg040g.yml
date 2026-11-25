@@ -224,7 +224,9 @@ jobs:
         # 16.1 现成固件里的那份不受影响，kmod-veth 的 symbol CRC 也不依赖它。
         TM=target/linux/airoha/Makefile
         sed -i 's/[[:space:]]*kmod-gpio-button-hotplug//' "$TM"
-        sed -i -E '/^CONFIG_PACKAGE_kmod-gpio-button-hotplug=/d' \
+        # seed 里有三行（PACKAGE / DEFAULT / MODULE_DEFAULT），只删 PACKAGE 那行
+        # 会被 DEFAULT_/MODULE_DEFAULT_ 再 select 回来（10-06 的教训）。
+        sed -i -E '/^CONFIG_(PACKAGE|DEFAULT|MODULE_DEFAULT)_kmod-gpio-button-hotplug=/d' \
           configs/an7581.config configs/release.config
         if grep -q 'kmod-gpio-button-hotplug' "$TM" configs/an7581.config configs/release.config; then
           echo "::error::kmod-gpio-button-hotplug 未从构建树摘干净"; exit 1
