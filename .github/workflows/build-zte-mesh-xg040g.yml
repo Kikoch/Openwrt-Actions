@@ -269,8 +269,9 @@ jobs:
           # （run #3 实测：make -r kernelversion: build failed），而且它会把
           # 几十行 prereq 检查混进命令替换，污染版本字符串。直接读源码里的
           # kernel-<patchver> 文件，这就是 kmod 编出来时的 LINUX_VERSION。
-          KPATCH="$(awk -F'= ' '/^KERNEL_PATCHVER:=/ {print $2; exit}' target/linux/airoha/Makefile)"
-          KSUFFIX="$(awk -F'= ' -v k="$KPATCH" '$1 == ("LINUX_VERSION-" k) {print $2; exit}' \
+          KPATCH="$(sed -n 's/^KERNEL_PATCHVER[[:space:]]*:=[[:space:]]*//p' \
+                    target/linux/airoha/Makefile | head -1)"
+          KSUFFIX="$(awk -v k="$KPATCH" '$1 == ("LINUX_VERSION-" k) {print $3; exit}' \
                      "target/linux/generic/kernel-$KPATCH")"
           KVER="${KPATCH}${KSUFFIX}"
           echo "Kernel version: $KVER (from target/linux/generic/kernel-$KPATCH)"
