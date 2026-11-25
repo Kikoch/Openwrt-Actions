@@ -249,7 +249,7 @@ jobs:
               echo "i18n 被 defconfig 丢掉，已补回"
             fi
           else
-            echo "luci.mk 没生成 luci-i18n-zte-mesh-zh-cn 符号"
+            echo "::error::luci.mk 没生成 luci-i18n-zte-mesh-zh-cn 符号"
             return 1
           fi
 
@@ -259,8 +259,8 @@ jobs:
             grep -qE "^CONFIG_PACKAGE_${p}=[my]" .config || MISSING="$MISSING $p"
           done
           if [ -n "$MISSING" ]; then
-            echo "defconfig 后缺包:$MISSING"
-            grep -E '^CONFIG_PACKAGE_(zte|kmod-veth|kmod-sched|luci-i18n-zte)' .config || true
+            echo "::error::defconfig 后缺包:$MISSING"
+            grep -E '^CONFIG_PACKAGE_(zte|kmod-veth|kmod-sched|luci.*zte)' .config || true
             return 1
           fi
           grep -E '^CONFIG_PACKAGE_(zte-mesh|zte-mesh-launcher|luci-app-zte-mesh|luci-i18n-zte-mesh-zh-cn|kmod-veth|kmod-sched-core)=' .config
@@ -268,7 +268,7 @@ jobs:
           KVER="$(make kernelversion)"
           echo "Kernel version: $KVER"
           if [ "$KVER" != "$EXPECT_KERNEL" ]; then
-            echo "内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"
+            echo "::error::内核版本 $KVER != 期望 $EXPECT_KERNEL，kmod 不能装进 16.1"
             return 1
           fi
           echo "KERNEL_VERSION=$KVER" >> "$GITHUB_ENV"
@@ -280,8 +280,10 @@ jobs:
           exit 0
         fi
         NL=$'\n'
-        echo "::error::$(esc "配置阶段失败，日志尾部:${NL}$(tail -80 "$LOG")")"
-        echo "::error::$(esc "相关 config 符号:${NL}$(grep -E '^CONFIG_(PACKAGE_(zte|kmod-veth|kmod-sched)|TARGET_airoha|KERNEL_DEBUG)' .config | sort -u | head -40 || true)")"
+        # diy-part2 会发一条带 %0A 的巨大 ::warning::，单条注解上限 4096 字符，
+        # 不过滤它就会把真正的失败原因整条截掉。只留普通日志行。
+        echo "::error::$(esc "配置阶段失败，日志尾部:${NL}$(grep -avE '::warning::|%0A' "$LOG" | tail -40)")"
+        echo "::error::$(esc "相关 config 符号:${NL}$(grep -E '^CONFIG_(PACKAGE_(zte|kmod-veth|kmod-sched|luci.*zte)|TARGET_airoha|KERNEL_DEBUG)' .config | sort -u | head -40 || true)")"
         exit 1
 
     - name: Build tools and toolchain
