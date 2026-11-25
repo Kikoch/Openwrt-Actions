@@ -360,6 +360,20 @@ jobs:
         LOG="$GITHUB_WORKSPACE/kmod-build.log"
         : > "$LOG"
         esc() { local s="${1//%/%25}"; printf '%s' "${s//$'\n'/%0A}"; }
+        # package/kernel/linux 的 install 阶段要 $(LINUX_DIR)/modules.builtin，
+        # 但本步只编 kmod、不编完整内核（run #11 实测 install: cannot stat）。
+        # 与 cnjn/build-apk.yml 的处理一致：在已 prepare 的内核目录放两个空文件。
+        # 它们只供 kernel 元包 install 用，不进我们要的 zte-mesh bundle。
+        KDIR="$(find build_dir -maxdepth 3 -type d -name "linux-$KERNEL_VERSION" -print -quit)"
+        if [ -z "$KDIR" ]; then
+          make -j"$(nproc)" target/linux/prepare
+          KDIR="$(find build_dir -maxdepth 3 -type d -name "linux-$KERNEL_VERSION" -print -quit)"
+        fi
+        [ -n "$KDIR" ] || { echo "::error::找不到内核构建目录 linux-$KERNEL_VERSION"; exit 1; }
+        : > "$KDIR/modules.builtin"
+        : > "$KDIR/modules.builtin.modinfo"
+        echo "kernel placeholders: $KDIR/modules.builtin{,.modinfo}"
+
         if ! make -j"$(nproc)" package/kernel/linux/compile 2>&1 | tee "$LOG"; then
           NL=$'\n'
           # 公开仓库只有注解匿名可读，失败摘要必须发 ::error:: 而不是只 echo。
